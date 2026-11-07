@@ -11,7 +11,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4   # Đổi từ v3 thành v4
 
     - name: Set up MSYS2
       uses: msys2/setup-msys2@v2
@@ -35,7 +35,7 @@ jobs:
         windeployqt .
 
     - name: Upload Windows EXE
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4   # Đổi từ v3 thành v4
       with:
         name: FMusic-Windows-Portable
         path: windows/build/
