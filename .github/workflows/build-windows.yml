@@ -1,0 +1,41 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: UCRT64
+        install: >-
+          mingw-w64-ucrt-x86_64-gcc
+          mingw-w64-ucrt-x86_64-cmake
+          mingw-w64-ucrt-x86_64-ninja
+          mingw-w64-ucrt-x86_64-qt6-base
+          mingw-w64-ucrt-x86_64-qt6-multimedia
+        update: true
+
+    - name: Build FMusic Executable
+      shell: msys2 {0}
+      run: |
+        cd windows
+        mkdir build && cd build
+        cmake -G Ninja ..
+        ninja
+        windeployqt .
+
+    - name: Upload Windows EXE
+      uses: actions/upload-artifact@v3
+      with:
+        name: FMusic-Windows-Portable
+        path: windows/build/
