@@ -1,13 +1,7 @@
 #include <QApplication>
-#include <QSurfaceFormat>
 #include "PlayerWidget.h"
 
 int main(int argc, char** argv) {
-    QSurfaceFormat fmt;
-    fmt.setSamples(4);          // MSAA: bo góc & vòng sóng nhạc mượt
-    fmt.setSwapInterval(1);     // vsync
-    QSurfaceFormat::setDefaultFormat(fmt);
-
     QApplication app(argc, argv);
     PlayerWidget w;
     w.setWindowTitle("Music Player");

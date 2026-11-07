@@ -2,7 +2,7 @@
 #include <QAudioSink>
 #include <QElapsedTimer>
 #include <QIODevice>
-#include <QOpenGLWidget>
+#include <QWidget>
 #include <QPixmap>
 #include <QStringList>
 #include <QTimer>
@@ -24,7 +24,7 @@ private:
     Player& p_;
 };
 
-class PlayerWidget : public QOpenGLWidget {
+class PlayerWidget : public QWidget {
     Q_OBJECT
 public:
     explicit PlayerWidget(QWidget* parent = nullptr);
@@ -32,7 +32,7 @@ public:
     void openFiles(const QStringList& files);
 
 protected:
-    void paintGL() override;
+    void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -62,7 +62,7 @@ private:
     Player player_;
     QAudioSink* sink_ = nullptr;
     PcmDevice*  pcm_  = nullptr;
-    QTimer tick_;
+    QTimer tick_, frame_;
     QElapsedTimer clock_;
     qint64 lastMs_ = 0;
 

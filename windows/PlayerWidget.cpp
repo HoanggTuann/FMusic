@@ -10,6 +10,7 @@
 #include <QMediaDevices>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QUrl>
@@ -111,7 +112,7 @@ QString formatTime(double s) {
 
 // =====================================================================================
 
-PlayerWidget::PlayerWidget(QWidget* parent) : QOpenGLWidget(parent) {
+PlayerWidget::PlayerWidget(QWidget* parent) : QWidget(parent) {
     setAcceptDrops(true);
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
@@ -136,8 +137,9 @@ PlayerWidget::PlayerWidget(QWidget* parent) : QOpenGLWidget(parent) {
     tick_.start(100);
     clock_.start();
 
-    // Vẽ liên tục theo vsync
-    connect(this, &QOpenGLWidget::frameSwapped, this, [this] { update(); });
+    // Vẽ lại ~60 fps bằng CPU (QWidget): chạy được cả trên máy ảo / máy không có driver OpenGL
+    connect(&frame_, &QTimer::timeout, this, [this] { update(); });
+    frame_.start(16);
 
     setCover(QImage());          // ảnh bìa mặc định cho tới khi có bài hát
 }
@@ -285,7 +287,7 @@ void PlayerWidget::keyPressEvent(QKeyEvent* e) {
     case Qt::Key_O:     openDialog(); break;
     case Qt::Key_Up:    sink_->setVolume(std::min(1.0, sink_->volume() + 0.05)); break;
     case Qt::Key_Down:  sink_->setVolume(std::max(0.0, sink_->volume() - 0.05)); break;
-    default: QOpenGLWidget::keyPressEvent(e);
+    default: QWidget::keyPressEvent(e);
     }
 }
 
@@ -345,7 +347,7 @@ void PlayerWidget::ensureShadow() {
 
 // ------------------------------- painting -------------------------------
 
-void PlayerWidget::paintGL() {
+void PlayerWidget::paintEvent(QPaintEvent*) {
     const qint64 ms = clock_.elapsed();
     const double dt = std::min(0.1, (ms - lastMs_) / 1000.0);
     lastMs_ = ms;
