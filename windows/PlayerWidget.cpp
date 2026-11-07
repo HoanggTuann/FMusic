@@ -31,7 +31,7 @@ void boxBlurPass(QImage& img, int r, bool horiz) {
     const int stride = int(img.bytesPerLine() / 4);
     const int step = horiz ? 1 : stride, lineStep = horiz ? stride : 1;
     auto* base = reinterpret_cast<uint32_t*>(img.bits());
-    std::vector<uint32_t> tmp(size_t(len));
+    std::vector<uint32_t> tmp(static_cast<size_t>(len));
     const int win = 2 * r + 1;
     for (int l = 0; l < lines; ++l) {
         uint32_t* line = base + size_t(l) * lineStep;
