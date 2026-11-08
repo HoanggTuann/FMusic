@@ -26,7 +26,7 @@ jobs:
           mingw-w64-ucrt-x86_64-qt6-multimedia
           mingw-w64-ucrt-x86_64-ffmpeg
 
-    - name: Build FMusic Executable
+    - name: Build FMusic
       shell: msys2 {0}
       run: |
         set -e
@@ -41,7 +41,7 @@ jobs:
         cd windows/build
 
         # 1) Plugin và DLL của Qt (bỏ bản dịch vì MSYS2 không có catalogs.json)
-        windeployqt6 --no-translations AppleStylePlayer.exe || true
+        windeployqt6 --no-translations FMusic.exe || true
 
         # 2) Hàm copy: bỏ qua nếu đã có, không bao giờ trả mã lỗi
         copy_dll() { [ -e "./$(basename "$1")" ] || cp "$1" . ; return 0; }
@@ -53,7 +53,7 @@ jobs:
 
         # 4) Mọi DLL phụ thuộc (FFmpeg, libaom, ...). Quét lặp vì có DLL lồng nhau
         for i in 1 2 3 4 5; do
-          for f in AppleStylePlayer.exe $(find . -name '*.dll'); do
+          for f in FMusic.exe $(find . -name '*.dll'); do
             for dep in $(ldd "$f" 2>/dev/null | grep -i '/ucrt64/' | awk '{print $3}'); do
               copy_dll "$dep"
             done
@@ -70,7 +70,7 @@ jobs:
 
         # 6) Gói gọn: chỉ giữ file cần chạy
         mkdir -p ../dist
-        cp -r *.exe *.dll generic imageformats multimedia networkinformation platforms styles tls ../dist/ 2>/dev/null || true
+        cp -r FMusic.exe *.dll generic imageformats multimedia networkinformation platforms styles tls ../dist/ 2>/dev/null || true
         ls ../dist | head -50
 
     - name: Upload Windows EXE
