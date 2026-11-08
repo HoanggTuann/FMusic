@@ -25,7 +25,7 @@ struct LyricsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                                 .id(line.id)
-                                .onTapGesture { if vm.lyricsSynced && line.time >= 0 { vm.seek(line.time) } }   // chạm 1 dòng để tua tới đó
+                                .onTapGesture { if vm.lyricsSynced && line.time >= 0 { vm.seek(max(0, line.time - UserDefaults.standard.double(forKey: "lyricOffsetMs") / 1000)) } }   // chạm 1 dòng để tua tới đó
                         }
                     }
                     .padding(.horizontal, 24)

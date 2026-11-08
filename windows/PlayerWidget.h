@@ -9,6 +9,7 @@
 #include <QVector>
 #include <QWidget>
 #include "Lyrics.h"
+#include "MediaSession.h"
 #include "Player.h"
 
 // Thiết bị "pull": QAudioSink gọi readData() -> Player::pull() (luôn trả đủ dữ liệu, thiếu thì im lặng).
@@ -40,6 +41,8 @@ protected:
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
+    void showEvent(QShowEvent*) override;
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
     void mouseDoubleClickEvent(QMouseEvent*) override;
     void wheelEvent(QWheelEvent*) override;
     void keyPressEvent(QKeyEvent*) override;
@@ -49,7 +52,7 @@ protected:
 private:
     struct Track { QString path, title, artist; double duration = 0.0; bool probed = false; };
     struct EqGeom { double left, top, h, colW; };
-    enum class Panel { None, Lyrics, Queue, Eq };
+    enum class Panel { None, Lyrics, Queue, Eq, Settings };
 
     // --- phát nhạc / danh sách ---
     void loadIndex(int i, bool autoplay);
@@ -80,6 +83,14 @@ private:
     void   loadEq();
     void   saveEq();
     void   layoutLyrics(double width);
+    void   loadSettings();
+    void   saveSettings();
+    QRectF settingsRow(int i) const;
+    void   setSettingFromX(int row, double x);
+    void   applyVolume();
+    void   updateMedia();
+    void   registerHotkeys();
+    void   unregisterHotkeys();
 
     // --- vẽ ---
     void computeLayout();
@@ -90,13 +101,18 @@ private:
     void drawTexts(QPainter& p);
     void drawProgress(QPainter& p);
     void drawControls(QPainter& p);
-    void drawTabs(QPainter& p);
+    void drawSidebar(QPainter& p);
+    void drawSettings(QPainter& p);
     void drawPanel(QPainter& p);
     void drawLyrics(QPainter& p);
     void drawQueue(QPainter& p);
     void drawEq(QPainter& p);
 
     Player player_;
+    MediaSession media_;
+    bool mediaInit_ = false, hotkeysOn_ = false;
+    QString lastMediaKey_;
+    int lastMediaState_ = -1;
     QAudioSink* sink_ = nullptr;
     PcmDevice*  pcm_  = nullptr;
     QTimer tick_, frame_;
@@ -132,7 +148,12 @@ private:
     double queueScroll_ = 0.0;
 
     // layout
-    double mainW_ = 0.0, titleY_ = 0.0;
+    double mainX_ = 0.0, mainW_ = 0.0, titleY_ = 0.0;
+
+    // cài đặt
+    bool setAmbient_ = true, setSpectrum_ = true;
+    double setLyricOffsetMs_ = 0.0, volume_ = 1.0;
+    int setDrag_ = -1;
     QRectF artRect_, progRect_, prevRect_, playRect_, nextRect_, openRect_, shufRect_, repRect_, panelRect_;
-    QRectF tabRects_[3];
+    QRectF navRects_[5];
 };

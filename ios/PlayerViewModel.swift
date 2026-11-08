@@ -352,7 +352,8 @@ final class PlayerViewModel: NSObject, ObservableObject {
         let p = core.position
         if abs(p - position) > 0.03 { position = p }
         if lyricsSynced && !lyrics.isEmpty {
-            let idx = lyricIndex(at: p + 0.05)
+            let offset = UserDefaults.standard.double(forKey: "lyricOffsetMs") / 1000     // chỉnh trong Cài đặt
+            let idx = lyricIndex(at: p + 0.05 + offset)
             if idx != currentLyric { currentLyric = idx }
         }
         if isPlaying && core.ended { next(automatic: true) }         // tự chuyển bài / dừng cuối danh sách
