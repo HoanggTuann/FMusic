@@ -3,10 +3,31 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "AudioDecoder.h"
+#include "Equalizer.h"
+#include "Lyrics.h"
 #include "Player.h"
 
 @implementation MPCTrackInfo
 @end
+@implementation MPCLyricLine
+@end
+@implementation MPCLyrics
+@end
+
+static NSString *NS(const std::string &s) {
+    return [NSString stringWithUTF8String:s.c_str()] ?: @"";
+}
+
+static MPCTrackInfo *MakeInfo(const TrackInfo &ti) {
+    MPCTrackInfo *info = [MPCTrackInfo new];
+    info.title = NS(ti.title);
+    info.artist = NS(ti.artist);
+    info.album = NS(ti.album);
+    info.lyrics = NS(ti.lyrics);
+    info.duration = ti.duration;
+    return info;
+}
 
 @implementation MusicPlayerCore {
     std::unique_ptr<Player> _player;
@@ -18,8 +39,7 @@
     if ((self = [super init])) {
         _player = std::make_unique<Player>();
         _scratch.resize(4096 * 2);
-        _info = [MPCTrackInfo new];
-        _info.title = @""; _info.artist = @""; _info.album = @"";
+        _info = MakeInfo(TrackInfo());
     }
     return self;
 }
@@ -34,12 +54,7 @@
         }
         return NO;
     }
-    const TrackInfo &ti = _player->info();
-    MPCTrackInfo *info = [MPCTrackInfo new];
-    info.title    = [NSString stringWithUTF8String:ti.title.c_str()]  ?: @"";
-    info.artist   = [NSString stringWithUTF8String:ti.artist.c_str()] ?: @"";
-    info.album    = [NSString stringWithUTF8String:ti.album.c_str()]  ?: @"";
-    info.duration = ti.duration;
+    MPCTrackInfo *info = MakeInfo(_player->info());
     const auto &c = _player->coverArt();
     info.coverArt = c.empty() ? nil : [NSData dataWithBytes:c.data() length:c.size()];
     _info = info;
@@ -77,6 +92,42 @@
     const NSInteger n = std::min<NSInteger>(count, Player::kBands);
     for (NSInteger i = 0; i < n; ++i) bands[i] = tmp[i];
     return bass;
+}
+
+// ----- Equalizer -----
+- (BOOL)eqEnabled { return _player->eq().enabled(); }
+- (void)setEqEnabled:(BOOL)on { _player->eq().setEnabled(on); }
+- (void)setEqGain:(float)db forBand:(NSInteger)band { _player->eq().setGain((int)band, db); }
+- (float)eqGainForBand:(NSInteger)band { return _player->eq().gain((int)band); }
+- (void)applyEqPreset:(NSInteger)index { _player->eq().applyPreset((int)index); }
+
++ (NSArray<NSString *> *)eqPresetNames {
+    NSMutableArray *names = [NSMutableArray array];
+    for (int i = 0; i < Equalizer::kPresetCount; ++i) [names addObject:NS(Equalizer::presetName(i))];
+    return names;
+}
+
+// ----- Tiện ích tĩnh -----
++ (MPCTrackInfo *)probePath:(NSString *)path {
+    TrackInfo ti;
+    if (!AudioDecoder::probe(path.UTF8String, ti)) return nil;
+    return MakeInfo(ti);
+}
+
++ (MPCLyrics *)parseLyrics:(NSString *)text {
+    Lyrics ly;
+    ly.parse(text.UTF8String ?: "");
+    NSMutableArray<MPCLyricLine *> *arr = [NSMutableArray arrayWithCapacity:ly.lines().size()];
+    for (const LyricLine &l : ly.lines()) {
+        MPCLyricLine *line = [MPCLyricLine new];
+        line.time = l.time;
+        line.text = NS(l.text);
+        [arr addObject:line];
+    }
+    MPCLyrics *out = [MPCLyrics new];
+    out.synced = ly.synced();
+    out.lines = arr;
+    return out;
 }
 
 @end

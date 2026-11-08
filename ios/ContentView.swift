@@ -2,30 +2,34 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // MARK: - Root
+enum PlayerPanel { case none, lyrics, queue, eq }
+
 struct ContentView: View {
     @StateObject private var vm = PlayerViewModel()
+    @State private var panel: PlayerPanel = .none
     @State private var showImporter = false
+    @State private var importAppend = false
+
+    private var importTypes: [UTType] { [.audio, UTType(filenameExtension: "lrc") ?? .plainText] }
 
     var body: some View {
         ZStack {
             AmbientBackground(image: vm.backdrop, token: vm.coverToken)
 
             VStack(spacing: 0) {
-                HStack {
-                    Button { showImporter = true } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 18, weight: .semibold))
-                            .frame(width: 40, height: 40)
-                            .background(.ultraThinMaterial, in: Circle())
+                topBar
+                Group {
+                    switch panel {
+                    case .none:
+                        ArtworkStage(cover: vm.cover, isPlaying: vm.isPlaying, spectrum: vm.spectrum)
+                            .padding(.horizontal, 12)
+                    case .lyrics: LyricsView(vm: vm)
+                    case .queue:  QueueView(vm: vm) { importAppend = true; showImporter = true }
+                    case .eq:     EQView(vm: vm)
                     }
-                    Spacer()
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-
-                ArtworkStage(cover: vm.cover, isPlaying: vm.isPlaying, spectrum: vm.spectrum)
-                    .padding(.horizontal, 12)
-                    .frame(maxHeight: .infinity)
+                .frame(maxHeight: .infinity)
+                .transition(.opacity)
 
                 VStack(spacing: 20) {
                     VStack(spacing: 4) {
@@ -33,26 +37,67 @@ struct ContentView: View {
                         Text(vm.artist).font(.system(size: 17)).opacity(0.6).lineLimit(1)
                     }
                     PlayerProgressBar(position: vm.position, duration: vm.duration) { vm.seek($0) }
-                    HStack(spacing: 56) {
-                        Button { vm.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 30)) }
-                        Button { vm.togglePlay() } label: {
-                            Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 44))
-                                .frame(width: 56, height: 56)
-                        }
-                        Button { vm.next() } label: { Image(systemName: "forward.fill").font(.system(size: 30)) }
-                    }
-                    .buttonStyle(.plain)
+                    controls
                 }
                 .padding(.horizontal, 28)
                 .padding(.bottom, 28)
             }
+            .animation(.easeInOut(duration: 0.25), value: panel)
         }
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { vm.openFiles(urls) }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: importTypes, allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { importAppend ? vm.addFiles(urls) : vm.openFiles(urls) }
         }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            circleButton("plus", active: false) { importAppend = false; showImporter = true }
+            Spacer()
+            circleButton("quote.bubble", active: panel == .lyrics) { toggle(.lyrics) }
+            circleButton("list.bullet", active: panel == .queue) { toggle(.queue) }
+            circleButton("slider.horizontal.3", active: panel == .eq) { toggle(.eq) }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    private var controls: some View {
+        HStack {
+            Button { vm.toggleShuffle() } label: {
+                Image(systemName: "shuffle").font(.system(size: 20, weight: .semibold)).opacity(vm.shuffle ? 1 : 0.4)
+            }
+            Spacer()
+            HStack(spacing: 44) {
+                Button { vm.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 30)) }
+                Button { vm.togglePlay() } label: {
+                    Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 44)).frame(width: 56, height: 56)
+                }
+                Button { vm.next() } label: { Image(systemName: "forward.fill").font(.system(size: 30)) }
+            }
+            Spacer()
+            Button { vm.cycleRepeat() } label: {
+                Image(systemName: vm.repeatMode == .one ? "repeat.1" : "repeat")
+                    .font(.system(size: 20, weight: .semibold)).opacity(vm.repeatMode == .off ? 0.4 : 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggle(_ p: PlayerPanel) { panel = (panel == p) ? .none : p }
+
+    private func circleButton(_ symbol: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .foregroundStyle(active ? Color.black : Color.white)
+                .background(active ? AnyShapeStyle(Color.white) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -5,6 +5,7 @@
 #include <thread>
 #include <vector>
 #include "AudioDecoder.h"
+#include "Equalizer.h"
 #include "RingBuffer.h"
 #include "SpectrumAnalyzer.h"
 
@@ -34,6 +35,8 @@ public:
     const TrackInfo& info() const { return info_; }
     const std::vector<uint8_t>& coverArt() const { return cover_; }
 
+    Equalizer& eq() { return eq_; }
+
     // Audio thread: điền đúng `frames` frame stereo float (thiếu thì chèn im lặng).
     void   pull(float* dst, size_t frames);
     // UI thread: ghi kBands giá trị 0..1 vào `bands`, trả về mức bass 0..1.
@@ -46,6 +49,7 @@ private:
 
     std::unique_ptr<AudioDecoder> dec_;
     RingBuffer ring_;
+    Equalizer eq_;
     SpectrumAnalyzer analyzer_;
     std::thread th_;
     std::atomic<bool> quit_{false}, playing_{false}, eof_{false}, ended_{false};

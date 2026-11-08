@@ -7,6 +7,7 @@ struct AVFormatContext; struct AVCodecContext; struct SwrContext; struct AVPacke
 
 struct TrackInfo {
     std::string title, artist, album;
+    std::string lyrics;         // lời nhúng trong tag (ID3 USLT / Vorbis LYRICS / ©lyr), có thể rỗng
     double duration = 0.0;      // giây
     int sampleRate = 0;         // của file gốc
     int channels = 0;
@@ -25,6 +26,8 @@ public:
     AudioDecoder& operator=(const AudioDecoder&) = delete;
 
     bool open(const std::string& utf8Path, std::string* err = nullptr);
+    // Đọc nhanh metadata + thời lượng mà không mở decoder (dùng cho danh sách phát). Thread-safe.
+    static bool probe(const std::string& utf8Path, TrackInfo& out);
     void close();
 
     // Giải mã thêm 1 khối PCM. Trả về số frame (>0), 0 = hết file, <0 = lỗi.

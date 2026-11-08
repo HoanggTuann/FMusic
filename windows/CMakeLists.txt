@@ -29,9 +29,8 @@ endif()
 
 # ---------- Lõi dùng chung (cùng mã nguồn với iOS) ----------
 set(CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../core")
-add_library(mp_core STATIC
-  ${CORE_DIR}/AudioDecoder.cpp ${CORE_DIR}/CoverArt.cpp ${CORE_DIR}/FFT.cpp
-  ${CORE_DIR}/SpectrumAnalyzer.cpp ${CORE_DIR}/Player.cpp)
+file(GLOB CORE_SOURCES CONFIGURE_DEPENDS "${CORE_DIR}/*.cpp")      # tự lấy mọi .cpp trong core/
+add_library(mp_core STATIC ${CORE_SOURCES})
 target_include_directories(mp_core PUBLIC ${CORE_DIR} ${FFMPEG_INCLUDE_DIR})
 target_link_libraries(mp_core PUBLIC ${FFMPEG_LIBS})
 
