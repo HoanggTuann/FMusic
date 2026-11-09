@@ -151,6 +151,7 @@ struct ContentView: View {
         }
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)
+        .onAppear { vm.scanDocuments() }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: importTypes, allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { importAppend ? vm.addFiles(urls) : vm.openFiles(urls) }
         }
@@ -245,7 +246,7 @@ struct SettingsView: View {
 
                 card {
                     Text("FMusic 0.3.0").font(.system(size: 16, weight: .semibold))
-                    Text("Giải mã bằng FFmpeg. Điều khiển từ màn hình khoá, Control Center và tai nghe đã được bật.")
+                    Text("Giải mã bằng FFmpeg. Điều khiển từ màn hình khoá, Control Center và tai nghe đã được bật. Tệp nhạc được sao chép vào Tệp ▸ Trên iPhone ▸ FMusic; bạn cũng có thể tự chép nhạc và tệp .lrc vào đó.")
                         .font(.footnote).opacity(0.6)
                 }
             }

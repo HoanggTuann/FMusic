@@ -96,6 +96,7 @@ struct QueueView: View {
                 .scrollContentBackground(.hidden)
             }
         }
+        .onAppear { vm.scanDocuments() }
     }
 
     private func chip(_ text: String, action: @escaping () -> Void) -> some View {

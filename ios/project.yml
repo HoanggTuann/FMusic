@@ -20,6 +20,8 @@ targets:
           - "Frameworks/**"
           - "build/**"
           - "project.yml"
+          - "ContentView.swift"        # tệp cũ (đã đổi thành NowPlayingViews.swift + Chrome.swift), bỏ qua nếu còn sót
+          - "MusicPlayerApp.swift"      # tệp cũ (đã đổi thành FMusicApp.swift)
           - "*.xcodeproj/**"
       - path: ../core            # lõi C++ dùng chung (FFmpeg decoder, FFT, EQ, Lyrics, Player)
     dependencies:

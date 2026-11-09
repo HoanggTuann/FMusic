@@ -132,7 +132,76 @@ final class PlayerViewModel: NSObject, ObservableObject {
     /// Thêm vào cuối danh sách.
     func addFiles(_ urls: [URL]) { ingest(urls, append: true) }
 
+    /// Sao chép tệp được chọn vào vùng riêng của app (Documents/Imported) rồi phát từ bản sao.
+    /// Nhờ vậy vẫn chạy khi chứng chỉ ký lại không cấp quyền đọc tệp bên ngoài sandbox.
     private func ingest(_ urls: [URL], append: Bool) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let local = urls.compactMap { Self.importToSandbox($0) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if local.isEmpty && !urls.isEmpty {
+                    self.title = "Không nhập được tệp"
+                    self.artist = "Hãy chép nhạc vào Tệp ▸ Trên iPhone ▸ FMusic"
+                    return
+                }
+                self.finishIngest(local, append: append)
+            }
+        }
+    }
+
+    private static func documentsDir() -> URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    }
+
+    private static func importToSandbox(_ url: URL) -> URL? {
+        let fm = FileManager.default
+        guard let docs = documentsDir() else { return nil }
+        if url.standardizedFileURL.path.hasPrefix(docs.standardizedFileURL.path) { return url }   // đã nằm trong sandbox
+        let dir = docs.appendingPathComponent("Imported", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(url.lastPathComponent)
+
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        let srcSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+        let dstSize = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -2
+        if fm.fileExists(atPath: dest.path), srcSize == dstSize { return dest }                  // đã có bản sao
+        try? fm.removeItem(at: dest)
+        do {
+            try fm.copyItem(at: url, to: dest)
+            return dest
+        } catch {
+            if let data = try? Data(contentsOf: url), (try? data.write(to: dest)) != nil { return dest }
+            return nil
+        }
+    }
+
+    /// Quét thư mục Documents của app (Tệp ▸ Trên iPhone ▸ FMusic): thêm nhạc/.lrc mà người dùng chép vào bằng app Tệp.
+    func scanDocuments() {
+        let fm = FileManager.default
+        guard let docs = Self.documentsDir() else { return }
+        try? fm.createDirectory(at: docs.appendingPathComponent("Imported", isDirectory: true), withIntermediateDirectories: true)
+        let exts: Set<String> = ["mp3", "flac", "m4a", "aac", "wav", "ogg", "opus", "wma", "ape", "aiff", "wv"]
+        var found: [URL] = []
+        if let en = fm.enumerator(at: docs, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for case let u as URL in en {
+                let e = u.pathExtension.lowercased()
+                if exts.contains(e) { found.append(u) }
+                else if e == "lrc" { lrcByName[u.deletingPathExtension().lastPathComponent.lowercased()] = u }
+            }
+        }
+        let known = Set(tracks.map { $0.url.standardizedFileURL.path })
+        let fresh = found.filter { !known.contains($0.standardizedFileURL.path) }
+                         .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !fresh.isEmpty else { return }
+        let items = fresh.map { TrackItem(url: $0, title: $0.deletingPathExtension().lastPathComponent) }
+        tracks.append(contentsOf: items)
+        probe(items)
+        if currentIndex < 0 { loadTrack(0, autoplay: false) }
+    }
+
+    private func finishIngest(_ urls: [URL], append: Bool) {
         for u in urls where u.pathExtension.lowercased() == "lrc" {
             lrcByName[u.deletingPathExtension().lastPathComponent.lowercased()] = u
         }
