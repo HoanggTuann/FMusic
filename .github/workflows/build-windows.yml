@@ -80,6 +80,10 @@ jobs:
     - name: Build installer (Inno Setup)
       shell: pwsh
       run: |
+        # Kiểm tra các tệp cần có để lỗi nói rõ thiếu gì
+        foreach ($f in @("installer\FMusic.iss", "windows\dist\FMusic.exe", "windows\icon\fmusic.ico")) {
+          if (!(Test-Path $f)) { Write-Error "THIEU tep trong repo: $f"; exit 1 }
+        }
         choco install innosetup -y --no-progress
         $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.3.0" }
         & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" installer\FMusic.iss
