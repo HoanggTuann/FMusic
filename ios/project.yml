@@ -1,0 +1,63 @@
+# XcodeGen: sinh FMusic.xcodeproj trong CI.  Chạy:  cd ios && xcodegen generate
+name: FMusic
+options:
+  bundleIdPrefix: com.fmusic
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.3.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  FMusic:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - "Frameworks/**"
+          - "build/**"
+          - "project.yml"
+          - "*.xcodeproj/**"
+      - path: ../core            # lõi C++ dùng chung (FFmpeg decoder, FFT, EQ, Lyrics, Player)
+    dependencies:
+      - framework: Frameworks/FFmpeg.xcframework
+        embed: false             # thư viện tĩnh
+      - sdk: libz.tbd
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: FMusic
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fmusic.app
+        PRODUCT_NAME: FMusic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_OBJC_BRIDGING_HEADER: MusicPlayer-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
+        CLANG_CXX_LIBRARY: "libc++"
+        OTHER_LDFLAGS: "-lc++"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../core"
+        "HEADER_SEARCH_PATHS[sdk=iphoneos*]":
+          - "$(inherited)"
+          - "$(SRCROOT)/../core"
+          - "$(SRCROOT)/Frameworks/FFmpeg.xcframework/ios-arm64/Headers"
+        "HEADER_SEARCH_PATHS[sdk=iphonesimulator*]":
+          - "$(inherited)"
+          - "$(SRCROOT)/../core"
+          - "$(SRCROOT)/Frameworks/FFmpeg.xcframework/ios-arm64-simulator/Headers"
