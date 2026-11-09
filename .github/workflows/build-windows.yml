@@ -11,31 +11,71 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4   # Đổi từ v3 thành v4
+      uses: actions/checkout@v4
 
     - name: Set up MSYS2
       uses: msys2/setup-msys2@v2
       with:
         msystem: UCRT64
+        update: true
         install: >-
           mingw-w64-ucrt-x86_64-gcc
           mingw-w64-ucrt-x86_64-cmake
           mingw-w64-ucrt-x86_64-ninja
           mingw-w64-ucrt-x86_64-qt6-base
           mingw-w64-ucrt-x86_64-qt6-multimedia
-        update: true
+          mingw-w64-ucrt-x86_64-ffmpeg
 
-    - name: Build FMusic Executable
+    - name: Build FMusic
       shell: msys2 {0}
       run: |
+        set -e
+        rm -rf windows/build
         cd windows
-        mkdir build && cd build
-        cmake -G Ninja ..
-        ninja
-        windeployqt .
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+
+    - name: Bundle DLLs
+      shell: msys2 {0}
+      run: |
+        cd windows/build
+
+        # 1) Plugin và DLL của Qt (bỏ bản dịch vì MSYS2 không có catalogs.json)
+        windeployqt6 --no-translations FMusic.exe || true
+
+        # 2) Hàm copy: bỏ qua nếu đã có, không bao giờ trả mã lỗi
+        copy_dll() { [ -e "./$(basename "$1")" ] || cp "$1" . ; return 0; }
+
+        # 3) Runtime của MinGW
+        for d in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+          copy_dll "/ucrt64/bin/$d"
+        done
+
+        # 4) Mọi DLL phụ thuộc (FFmpeg, libaom, ...). Quét lặp vì có DLL lồng nhau
+        for i in 1 2 3 4 5; do
+          for f in FMusic.exe $(find . -name '*.dll'); do
+            for dep in $(ldd "$f" 2>/dev/null | grep -i '/ucrt64/' | awk '{print $3}'); do
+              copy_dll "$dep"
+            done
+          done
+        done
+
+        # 5) Kiểm tra: thiếu DLL nào là CI báo đỏ ngay
+        echo "So DLL: $(ls *.dll | wc -l)"
+        missing=0
+        for d in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll libaom.dll avcodec-*.dll avformat-*.dll swresample-*.dll swscale-*.dll Qt6Core.dll Qt6Multimedia.dll; do
+          if ! ls $d >/dev/null 2>&1; then echo "THIEU $d"; missing=1; fi
+        done
+        [ "$missing" = "0" ] || exit 1
+
+        # 6) Gói gọn: chỉ giữ file cần chạy
+        mkdir -p ../dist
+        cp -r FMusic.exe *.dll generic imageformats multimedia networkinformation platforms styles tls ../dist/ 2>/dev/null || true
+        ls ../dist | head -50
 
     - name: Upload Windows EXE
-      uses: actions/upload-artifact@v4   # Đổi từ v3 thành v4
+      uses: actions/upload-artifact@v4
       with:
         name: FMusic-Windows-Portable
-        path: windows/build/
+        path: windows/dist/
+        if-no-files-found: error
