@@ -1,1 +1,6 @@
 windows/build/
+test_dsp
+windows/build/
+windows/dist/
+ios/build/
+ios/Frameworks/

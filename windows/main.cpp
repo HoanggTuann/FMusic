@@ -1,18 +1,18 @@
 #include <QApplication>
-#include <QSurfaceFormat>
+#include <QIcon>
 #include "PlayerWidget.h"
 
 int main(int argc, char** argv) {
-    QSurfaceFormat fmt;
-    fmt.setSamples(4);          // MSAA: bo góc & vòng sóng nhạc mượt
-    fmt.setSwapInterval(1);     // vsync
-    QSurfaceFormat::setDefaultFormat(fmt);
-
     QApplication app(argc, argv);
+    app.setApplicationName("FMusic");
+    app.setOrganizationName("FMusic");
+    app.setApplicationDisplayName("FMusic");
+    app.setWindowIcon(QIcon(":/fmusic.png"));
+
     PlayerWidget w;
-    w.setWindowTitle("Music Player");
-    w.setMinimumSize(480, 660);
-    w.resize(900, 780);
+    w.setWindowTitle("FMusic");
+    w.setMinimumSize(820, 680);
+    w.resize(1100, 780);
     w.show();
 
     QStringList args = app.arguments();

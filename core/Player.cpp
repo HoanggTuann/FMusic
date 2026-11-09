@@ -5,6 +5,7 @@
 
 Player::Player()
     : ring_(size_t(kSampleRate) * 2 * 2),          // ~2 giây PCM
+      eq_(kSampleRate),
       analyzer_(4096, kBands, kSampleRate) {}
 
 Player::~Player() { stopThread(); }
@@ -91,6 +92,7 @@ void Player::pull(float* dst, size_t frames) {
         if (eof_) ended_ = true;                              // eof + ring cạn = hết bài
     }
     if (got) {
+        eq_.process(dst, got);                                // EQ trước khi phân tích phổ -> thanh sóng phản ánh EQ
         analyzer_.push(dst, got);
         played_ += got;
     }

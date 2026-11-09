@@ -23,6 +23,38 @@ static std::string baseName(const std::string& p) {
     return dot == std::string::npos || dot == 0 ? n : n.substr(0, dot);
 }
 
+
+// Đọc title/artist/album/lyrics/duration. idx = chỉ số luồng audio (hoặc -1).
+static void readMeta(AVFormatContext* fmt, int idx, const std::string& path, TrackInfo& info) {
+    AVStream* st = idx >= 0 ? fmt->streams[idx] : nullptr;
+    info.title  = metaGet(fmt->metadata, "title");
+    info.artist = metaGet(fmt->metadata, "artist");
+    info.album  = metaGet(fmt->metadata, "album");
+    if (st) {
+        if (info.title.empty())  info.title  = metaGet(st->metadata, "title");
+        if (info.artist.empty()) info.artist = metaGet(st->metadata, "artist");
+    }
+    if (info.title.empty())  info.title  = baseName(path);
+    if (info.artist.empty()) info.artist = metaGet(fmt->metadata, "album_artist");
+    // "lyrics", "lyrics-eng", "LYRICS"...: khớp theo tiền tố
+    const AVDictionaryEntry* e = av_dict_get(fmt->metadata, "lyrics", nullptr, AV_DICT_IGNORE_SUFFIX);
+    if (!e && st) e = av_dict_get(st->metadata, "lyrics", nullptr, AV_DICT_IGNORE_SUFFIX);
+    if (e && e->value) info.lyrics = e->value;
+    if (fmt->duration > 0) info.duration = double(fmt->duration) / AV_TIME_BASE;
+}
+
+bool AudioDecoder::probe(const std::string& path, TrackInfo& out) {
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0) return false;
+    bool ok = false;
+    if (avformat_find_stream_info(fmt, nullptr) >= 0) {
+        const int idx = av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+        if (idx >= 0) { out = TrackInfo(); readMeta(fmt, idx, path, out); ok = true; }
+    }
+    avformat_close_input(&fmt);
+    return ok;
+}
+
 AudioDecoder::AudioDecoder() {
     pkt_ = av_packet_alloc();
     frame_ = av_frame_alloc();
@@ -91,14 +123,7 @@ bool AudioDecoder::open(const std::string& path, std::string* err) {
     if ((r = swr_init(swr_)) < 0) return fail("swr_init", r);
 
     // ----- metadata -----
-    info_.title  = metaGet(fmt_->metadata, "title");
-    info_.artist = metaGet(fmt_->metadata, "artist");
-    info_.album  = metaGet(fmt_->metadata, "album");
-    if (info_.title.empty())  info_.title  = metaGet(st->metadata, "title");
-    if (info_.artist.empty()) info_.artist = metaGet(st->metadata, "artist");
-    if (info_.title.empty())  info_.title  = baseName(path);
-    if (info_.artist.empty()) info_.artist = metaGet(fmt_->metadata, "album_artist");
-    if (fmt_->duration > 0) info_.duration = double(fmt_->duration) / AV_TIME_BASE;
+    readMeta(fmt_, streamIdx_, path, info_);
     info_.sampleRate = codec_->sample_rate;
     info_.channels = codec_->ch_layout.nb_channels;
 

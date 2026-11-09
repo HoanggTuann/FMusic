@@ -1,0 +1,74 @@
+name: Build iOS App
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-15            # có Xcode 16 và 26; bước dưới tự chọn bản mới nhất
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Xcode 26 -> Liquid Glass thật; Xcode cũ hơn -> tự dùng kính mờ (đã có #if compiler(>=6.2) trong mã)
+      - name: Select Xcode (mới nhất)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Cài công cụ
+        run: |
+          brew install xcodegen
+          xcodebuild -version
+
+      # FFmpeg build mất vài phút -> cache theo nội dung script
+      - name: Cache FFmpeg.xcframework
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks/FFmpeg.xcframework
+          key: ffmpeg-ios-${{ hashFiles('scripts/build-ffmpeg-ios.sh') }}
+
+      - name: Build FFmpeg.xcframework
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x ./scripts/build-ffmpeg-ios.sh
+          ./scripts/build-ffmpeg-ios.sh
+
+      - name: Tạo FMusic.xcodeproj (XcodeGen)
+        run: |
+          cd ios
+          xcodegen generate
+
+      - name: Build iOS App (không ký)
+        run: |
+          cd ios
+          xcodebuild build \
+            -project FMusic.xcodeproj \
+            -scheme FMusic \
+            -destination 'generic/platform=iOS' \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      # IPA chưa ký: dùng Sideloadly / AltStore / TrollStore để ký và cài lên máy
+      - name: Đóng gói IPA
+        run: |
+          cd ios/build/Build/Products/Release-iphoneos
+          mkdir -p Payload
+          cp -R FMusic.app Payload/
+          zip -qr FMusic-unsigned.ipa Payload
+          ls -la
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FMusic-iOS-unsigned-ipa
+          path: ios/build/Build/Products/Release-iphoneos/FMusic-unsigned.ipa
+          if-no-files-found: error

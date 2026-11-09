@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="fmusic.png">icon/fmusic-256.png</file>
+  </qresource>
+</RCC>

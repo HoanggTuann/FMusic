@@ -1,14 +1,15 @@
 cmake_minimum_required(VERSION 3.21)
-project(AppleStyleMusicPlayer LANGUAGES CXX)
+project(FMusic LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 if(MSVC)
   add_compile_options(/utf-8 /W3)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia)
 
 # ---------- FFmpeg ----------
 # Cách 1 (khuyến nghị): vcpkg  ->  vcpkg install ffmpeg:x64-windows   rồi dùng -DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake
@@ -29,12 +30,38 @@ endif()
 
 # ---------- Lõi dùng chung (cùng mã nguồn với iOS) ----------
 set(CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../core")
-add_library(mp_core STATIC
-  ${CORE_DIR}/AudioDecoder.cpp ${CORE_DIR}/CoverArt.cpp ${CORE_DIR}/FFT.cpp
-  ${CORE_DIR}/SpectrumAnalyzer.cpp ${CORE_DIR}/Player.cpp)
+file(GLOB CORE_SOURCES CONFIGURE_DEPENDS "${CORE_DIR}/*.cpp")      # tự lấy mọi .cpp trong core/
+add_library(mp_core STATIC ${CORE_SOURCES})
 target_include_directories(mp_core PUBLIC ${CORE_DIR} ${FFMPEG_INCLUDE_DIR})
 target_link_libraries(mp_core PUBLIC ${FFMPEG_LIBS})
 
-# ---------- Ứng dụng Qt + OpenGL ----------
-add_executable(AppleStylePlayer WIN32 main.cpp PlayerWidget.cpp PlayerWidget.h)
-target_link_libraries(AppleStylePlayer PRIVATE mp_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Multimedia)
+# ---------- Media Windows (SMTC): tự thử biên dịch, không được thì dùng bản dự phòng ----------
+set(MEDIA_SRC MediaSessionStub.cpp)
+set(MEDIA_LIBS "")
+if(WIN32)
+  find_library(RUNTIMEOBJECT_LIB NAMES runtimeobject)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+  try_compile(FMUSIC_SMTC_OK "${CMAKE_BINARY_DIR}/smtc_check"
+    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/MediaSessionSmtc.cpp"
+    CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${CMAKE_CURRENT_SOURCE_DIR}"
+    CXX_STANDARD 17
+    OUTPUT_VARIABLE SMTC_LOG)
+  if(FMUSIC_SMTC_OK AND (MSVC OR RUNTIMEOBJECT_LIB))
+    set(MEDIA_SRC MediaSessionSmtc.cpp)
+    set(MEDIA_LIBS runtimeobject ole32)
+    message(STATUS "FMusic: SMTC (khai báo media với Windows) = BẬT")
+  else()
+    message(WARNING "FMusic: không biên dịch được SMTC với toolchain này -> dùng phím media toàn cục (RegisterHotKey)")
+  endif()
+endif()
+
+# ---------- Ứng dụng FMusic ----------
+set(APP_SOURCES main.cpp PlayerWidget.cpp PlayerWidget.h ${MEDIA_SRC} resources.qrc)
+if(WIN32)
+  enable_language(RC)
+  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/FMusic.rc.in" "${CMAKE_BINARY_DIR}/FMusic.rc" @ONLY)
+  list(APPEND APP_SOURCES "${CMAKE_BINARY_DIR}/FMusic.rc")
+endif()
+add_executable(FMusic WIN32 ${APP_SOURCES})
+target_include_directories(FMusic PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(FMusic PRIVATE mp_core Qt6::Widgets Qt6::Multimedia ${MEDIA_LIBS})
