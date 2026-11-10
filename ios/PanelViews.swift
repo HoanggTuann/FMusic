@@ -208,6 +208,7 @@ struct EQView: View {
         .padding(.horizontal, 20)
         .alert("Lưu Preset EQ", isPresented: $showSaveAlert) {
             TextField("Tên preset", text: $presetName)
+                .foregroundStyle(Color.primary)
             Button("Lưu") {
                 if !presetName.trimmingCharacters(in: .whitespaces).isEmpty {
                     vm.saveCurrentAsPreset(name: presetName.trimmingCharacters(in: .whitespaces))
@@ -216,6 +217,7 @@ struct EQView: View {
             }
             Button("Huỷ", role: .cancel) { presetName = "" }
         }
+        .environment(\.colorScheme, .dark)
         .sheet(isPresented: $showShareSheet) {
             if let exportURL {
                 ShareSheet(items: [exportURL])

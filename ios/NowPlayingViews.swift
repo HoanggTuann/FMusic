@@ -83,7 +83,7 @@ struct ArtworkStage: View {
 
             ZStack {
                 if showSpectrum {
-                    SpectrumRing(bands: spectrum.bands, artSide: art)
+                    SpectrumRing(spectrum: spectrum, artSide: art)
                         .frame(width: full, height: full)
                 }
 
@@ -112,11 +112,12 @@ struct ArtworkStage: View {
 }
 
 struct SpectrumRing: View {
-    let bands: [Float]
+    @ObservedObject var spectrum: SpectrumModel
     let artSide: CGFloat
 
     var body: some View {
         Canvas { ctx, size in
+            let bands = spectrum.bands
             let c = CGPoint(x: size.width / 2, y: size.height / 2)
             let gap = artSide * 0.035
             let maxLen = artSide * 0.15

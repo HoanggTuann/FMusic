@@ -68,8 +68,11 @@ PROTOCOLS="file,http,https,tcp,tls"
   --cxx="$CXX" \
   --ar="$AR" \
   --ranlib="$RANLIB" \
+  --strip="$TOOLCHAIN/bin/llvm-strip" \
+  --nm="$TOOLCHAIN/bin/llvm-nm" \
   --enable-shared \
   --disable-static \
+  --disable-stripping \
   --enable-pic \
   --disable-programs \
   --disable-doc \
@@ -85,7 +88,7 @@ PROTOCOLS="file,http,https,tcp,tls"
   --disable-autodetect
 
 make -j"$(nproc)"
-make install
+make install-libs install-headers
 popd >/dev/null
 
 cp "$PREFIX"/lib/lib*.so "$OUT/$ABI/"

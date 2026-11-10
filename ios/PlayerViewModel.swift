@@ -587,7 +587,8 @@ final class PlayerViewModel: NSObject, ObservableObject {
     // MARK: 60 Hz tick (chỉ chạy khi sáng màn hình)
     @objc private func tick() {
         let bass = core.copySpectrum(&bandBuffer, count: bandBuffer.count)
-        spectrum.bands = bandBuffer
+        spectrum.objectWillChange.send()
+        spectrum.bands = Array(bandBuffer)
         spectrum.bass = bass
 
         let p = core.position

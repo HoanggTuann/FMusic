@@ -723,9 +723,9 @@ QRectF PlayerWidget::queueClearRect() const {
 
 QRectF PlayerWidget::presetRect(int i) const {
     const QRectF in = panelInner();
-    const double w = (in.width() - 8 * 3) / 4.0;
-    const int row = i / 4, col = i % 4;
-    return QRectF(in.left() + col * (w + 8), in.top() + 50 + row * 36, w, 30);
+    const double w = (in.width() - 8 * 4) / 5.0;
+    const int row = i / 5, col = i % 5;
+    return QRectF(in.left() + col * (w + 8), in.top() + 46 + row * 34, w, 28);
 }
 
 QRectF PlayerWidget::eqToggleRect() const {
@@ -735,7 +735,7 @@ QRectF PlayerWidget::eqToggleRect() const {
 
 PlayerWidget::EqGeom PlayerWidget::eqGeom() const {
     const QRectF in = panelInner();
-    const double top = in.top() + 150.0;
+    const double top = in.top() + 148.0;
     const double h = std::max(120.0, in.bottom() - top - 70.0);
     const double colW = in.width() / Equalizer::kBands;
     return EqGeom{ in.left(), top, h, colW };
@@ -1296,13 +1296,13 @@ void PlayerWidget::drawEq(QPainter& p) {
     p.setBrush(Qt::NoBrush);
 
     // Presets sẵn
-    p.setFont(uiFont(13, true));
+    p.setFont(uiFont(12, true));
     for (int i = 0; i < Equalizer::kPresetCount; ++i) {
         const QRectF r = presetRect(i);
         const bool act = (i == eqPreset_);
         p.setPen(Qt::NoPen);
         p.setBrush(act ? QColor(255, 255, 255, 235) : QColor(255, 255, 255, 38));
-        p.drawRoundedRect(r, 15, 15);
+        p.drawRoundedRect(r, 14, 14);
         p.setBrush(Qt::NoBrush);
         p.setPen(act ? QColor(20, 20, 24) : QColor(255, 255, 255, 220));
         p.drawText(r, Qt::AlignCenter, QString::fromUtf8(Equalizer::presetName(i)));
