@@ -862,12 +862,12 @@ void PlayerWidget::drawBackdrop(QPainter& p, const QPixmap& pix, double t, doubl
     // Lớp 1: xoay thuận với trôi dạt nhẹ
     p.translate(W / 2 + std::sin(t * 0.06) * W * 0.03, H / 2 + std::cos(t * 0.04) * H * 0.03);
     p.rotate(bgAngle_ * 0.35f + std::sin(t * 0.03) * 6.0);
-    p.drawPixmap(QRectF(-S / 2, -S / 2, S, S), pix, pix.rect());
+    p.drawPixmap(QRectF(-S / 2, -S / 2, S, S), pix, QRectF(pix.rect()));
     // Lớp 2: xoay ngược, tỷ lệ lớn hơn để màu loang trộn
     p.setOpacity(opacity * 0.55);
     p.rotate(-bgAngle_ * 0.55f + 45.0);
     p.scale(1.22, 1.22);
-    p.drawPixmap(QRectF(-S / 2, -S / 2, S, S), pix, pix.rect());
+    p.drawPixmap(QRectF(-S / 2, -S / 2, S, S), pix, QRectF(pix.rect()));
     p.restore();
 }
 
@@ -902,13 +902,12 @@ void PlayerWidget::drawArtAndSpectrum(QPainter& p, const float* bands) {
 
     // Drop shadow
     if (!shadowPix_.isNull()) {
-        const double pad = shadowPad_;
-        p.drawPixmap(QRectF(artRect_.left() - pad, artRect_.top() - pad, shadowPix_.width(), shadowPix_.height()), shadowPix_);
+        p.drawPixmap(QPointF(artRect_.left() - shadowPad_, artRect_.top() - shadowPad_ + art * 0.06), shadowPix_);
     }
 
     // Ảnh bìa
     if (!cover_.isNull()) {
-        p.drawPixmap(artRect_, cover_, cover_.rect());
+        p.drawPixmap(artRect_, cover_, QRectF(cover_.rect()));
     }
 
     // Viền trắng mờ quanh bìa
