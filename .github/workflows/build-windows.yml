@@ -44,10 +44,10 @@ jobs:
       run: |
         cd windows/build
 
-        # 1) Plugin và DLL của Qt (bỏ bản dịch vì MSYS2 không có catalogs.json)
+        # 1) Plugin và DLL của Qt
         windeployqt6 --no-translations FMusic.exe || true
 
-        # 2) Hàm copy: bỏ qua nếu đã có, không bao giờ trả mã lỗi
+        # 2) Hàm copy
         copy_dll() { [ -e "./$(basename "$1")" ] || cp "$1" . ; return 0; }
 
         # 3) Runtime của MinGW
@@ -55,7 +55,7 @@ jobs:
           copy_dll "/ucrt64/bin/$d"
         done
 
-        # 4) Mọi DLL phụ thuộc (FFmpeg, libaom, ...). Quét lặp vì có DLL lồng nhau
+        # 4) Quét và copy DLL phụ thuộc
         for i in 1 2 3 4 5; do
           for f in FMusic.exe $(find . -name '*.dll'); do
             for dep in $(ldd "$f" 2>/dev/null | grep -i '/ucrt64/' | awk '{print $3}'); do
@@ -64,20 +64,35 @@ jobs:
           done
         done
 
-        # 5) Kiểm tra: thiếu DLL nào là CI báo đỏ ngay
-        echo "So DLL: $(ls *.dll | wc -l)"
+        # 5) Kiểm tra DLL cốt lõi
         missing=0
         for d in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll libaom.dll avcodec-*.dll avformat-*.dll swresample-*.dll swscale-*.dll Qt6Core.dll Qt6Multimedia.dll; do
           if ! ls $d >/dev/null 2>&1; then echo "THIEU $d"; missing=1; fi
         done
         [ "$missing" = "0" ] || exit 1
 
-        # 6) Gói gọn: chỉ giữ file cần chạy
+        # 6) Gom vào windows/dist
         mkdir -p ../dist
         cp -r FMusic.exe *.dll generic imageformats multimedia networkinformation platforms styles tls ../dist/ 2>/dev/null || true
         ls ../dist | head -50
 
-    - name: Upload Windows EXE
+    - name: Build Inno Setup Installer
+      shell: cmd
+      run: |
+        choco install innosetup --no-progress -y
+        set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        if not exist "%ISCC%" set "ISCC=C:\Program Files\Inno Setup 6\ISCC.exe"
+        if not exist "%ISCC%" for /f "delims=" %%i in ('where iscc 2^>nul') do set "ISCC=%%i"
+        "%ISCC%" /DMyAppVersion=1.1.0 Installer\FMusic.iss
+
+    - name: Upload Windows Setup Installer (.exe cài đặt)
+      uses: actions/upload-artifact@v4
+      with:
+        name: FMusic-Windows-Setup-Installer
+        path: installer-out/*.exe
+        if-no-files-found: error
+
+    - name: Upload Windows Portable
       uses: actions/upload-artifact@v4
       with:
         name: FMusic-Windows-Portable
