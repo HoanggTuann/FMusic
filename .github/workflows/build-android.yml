@@ -26,33 +26,90 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/app/libs
-          key: ffmpeg-android-${{ hashFiles('scripts/build-ffmpeg-android.sh') }}
+          key: ffmpeg-android-arm64-v7.1
 
       - name: Build Android FFmpeg
         if: steps.ffmpeg-android-cache.outputs.cache-hit != 'true'
         run: |
-          if [ -f "./scripts/build-ffmpeg-android.sh" ]; then
-            chmod +x ./scripts/build-ffmpeg-android.sh
-            ./scripts/build-ffmpeg-android.sh
+          mkdir -p android/app/libs/arm64-v8a android/app/libs/include
+          if [ -f "android/app/libs/arm64-v8a/libavcodec.so" ]; then
+            echo "FFmpeg already exists in cache."
+            exit 0
           fi
 
-      - name: Prepare Gradle Wrapper
-        run: |
-          cd android
-          if [ ! -f "gradlew" ]; then
-            echo "gradlew không có sẵn, đang sinh gradle wrapper..."
-            gradle wrapper
+          # Find NDK on runner
+          NDK=$(ls -d /usr/local/lib/android/sdk/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK" ]; then
+            echo "Installing NDK..."
+            $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
+            NDK="/usr/local/lib/android/sdk/ndk/27.0.12077973"
           fi
-          chmod +x gradlew
+          echo "Using Android NDK: $NDK"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+
+          echo "Downloading FFmpeg 7.1..."
+          if curl -fsSL --retry 3 --retry-delay 2 "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n7.1" -o ffmpeg.tar.gz; then
+            tar -xzf ffmpeg.tar.gz
+            mv FFmpeg-n7.1 ffmpeg-7.1 2>/dev/null || true
+            rm -f ffmpeg.tar.gz
+          else
+            curl -fsSL --retry 3 --retry-delay 2 "https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz" | tar xJ
+          fi
+          cd ffmpeg-7.1
+
+          DECODERS="mp3,mp3float,flac,aac,aac_latm,alac,vorbis,opus,wavpack,ape,wmav1,wmav2,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_f32le,pcm_u8,mjpeg,png,bmp"
+          DEMUXERS="mp3,flac,mov,ogg,wav,aac,ape,asf,matroska,aiff,wv"
+          PARSERS="mpegaudio,aac,aac_latm,flac,vorbis,opus,mjpeg,png,bmp"
+          PROTOCOLS="file,http,https,tcp,tls"
+
+          ./configure \
+            --prefix="$PWD/../ffmpeg-out" \
+            --enable-cross-compile \
+            --target-os=android \
+            --arch=aarch64 \
+            --cpu=armv8-a \
+            --cc="$TOOLCHAIN/bin/aarch64-linux-android26-clang" \
+            --cxx="$TOOLCHAIN/bin/aarch64-linux-android26-clang++" \
+            --ar="$TOOLCHAIN/bin/llvm-ar" \
+            --ranlib="$TOOLCHAIN/bin/llvm-ranlib" \
+            --strip="$TOOLCHAIN/bin/llvm-strip" \
+            --nm="$TOOLCHAIN/bin/llvm-nm" \
+            --enable-shared \
+            --disable-static \
+            --disable-stripping \
+            --enable-pic \
+            --disable-programs \
+            --disable-doc \
+            --disable-debug \
+            --disable-avdevice \
+            --disable-avfilter \
+            --disable-everything \
+            --enable-decoder="$DECODERS" \
+            --enable-demuxer="$DEMUXERS" \
+            --enable-parser="$PARSERS" \
+            --enable-protocol="$PROTOCOLS" \
+            --enable-network \
+            --disable-autodetect \
+            --disable-asm
+
+          make -j$(nproc)
+          make install-libs install-headers
+          cd ..
+
+          cp ffmpeg-out/lib/lib*.so android/app/libs/arm64-v8a/
+          cp -R ffmpeg-out/include/* android/app/libs/include/
+          echo "FFmpeg arm64-v8a installed successfully:"
+          ls -la android/app/libs/arm64-v8a/
 
       - name: Build Android APK
         run: |
           cd android
+          chmod +x gradlew
           ./gradlew assembleRelease --stacktrace
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: FMusic-Android-Release
+          name: FMusic-Android-Release-APK
           path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
