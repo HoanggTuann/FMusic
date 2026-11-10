@@ -21,7 +21,13 @@ cd "$WORK"
 
 if [ ! -d "ffmpeg-$FFMPEG_VERSION" ]; then
   echo ">>> Tải FFmpeg $FFMPEG_VERSION..."
-  curl -fsSL "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" | tar xJ
+  if curl -fsSL --retry 3 --retry-delay 2 "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n${FFMPEG_VERSION}" -o ffmpeg.tar.gz; then
+    tar -xzf ffmpeg.tar.gz
+    mv "FFmpeg-n${FFMPEG_VERSION}" "ffmpeg-${FFMPEG_VERSION}" 2>/dev/null || true
+    rm -f ffmpeg.tar.gz
+  else
+    curl -fsSL --retry 3 --retry-delay 2 "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" | tar xJ
+  fi
 fi
 
 # Tìm Android NDK
