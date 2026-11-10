@@ -21,22 +21,38 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: Install FFmpeg development headers
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
+      - name: Cache Android FFmpeg
+        id: ffmpeg-android-cache
+        uses: actions/cache@v4
+        with:
+          path: android/app/libs
+          key: ffmpeg-android-${{ hashFiles('scripts/build-ffmpeg-android.sh') }}
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x andr/gradlew
+      - name: Build Android FFmpeg
+        if: steps.ffmpeg-android-cache.outputs.cache-hit != 'true'
+        run: |
+          if [ -f "./scripts/build-ffmpeg-android.sh" ]; then
+            chmod +x ./scripts/build-ffmpeg-android.sh
+            ./scripts/build-ffmpeg-android.sh
+          fi
+
+      - name: Prepare Gradle Wrapper
+        run: |
+          cd android
+          if [ ! -f "gradlew" ]; then
+            echo "gradlew không có sẵn, đang sinh gradle wrapper..."
+            gradle wrapper
+          fi
+          chmod +x gradlew
 
       - name: Build Android APK
         run: |
-          cd andr
+          cd android
           ./gradlew assembleRelease --stacktrace
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: FMusic-Android-Release
-          path: andr/app/build/outputs/apk/release/*.apk
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
