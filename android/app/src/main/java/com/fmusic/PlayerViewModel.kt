@@ -8,7 +8,6 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
-import android.support.v4.media.session.MediaSessionCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*

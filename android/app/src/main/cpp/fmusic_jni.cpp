@@ -95,4 +95,47 @@ Java_com_fmusic_MusicPlayerCore_getEqGain(JNIEnv*, jobject, jlong h, jint band) 
     return reinterpret_cast<Player*>(h)->eq().gain(band);
 }
 
+JNIEXPORT jobject JNICALL
+Java_com_fmusic_MusicPlayerCore_probePath(JNIEnv* env, jclass, jstring path) {
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    TrackInfo ti;
+    bool ok = AudioDecoder::probe(p, ti);
+    env->ReleaseStringUTFChars(path, p);
+    if (!ok) return nullptr;
+
+    jclass cls = env->FindClass("com/fmusic/TrackInfoData");
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;DIL[B)V");
+    jstring title = env->NewStringUTF(ti.title.c_str());
+    jstring artist = env->NewStringUTF(ti.artist.c_str());
+    jstring album = env->NewStringUTF(ti.album.c_str());
+    return env->NewObject(cls, ctor, title, artist, album, (jdouble)ti.duration, (jint)ti.sampleRate, nullptr);
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_fmusic_MusicPlayerCore_parseLyrics(JNIEnv* env, jclass, jstring text) {
+    const char* t = env->GetStringUTFChars(text, nullptr);
+    auto l = parseLrc(t);
+    env->ReleaseStringUTFChars(text, t);
+
+    jclass listCls = env->FindClass("java/util/ArrayList");
+    jmethodID listCtor = env->GetMethodID(listCls, "<init>", "()V");
+    jmethodID listAdd = env->GetMethodID(listCls, "add", "(Ljava/lang/Object;)Z");
+    jobject list = env->NewObject(listCls, listCtor);
+
+    jclass lineCls = env->FindClass("com/fmusic/LyricLineData");
+    jmethodID lineCtor = env->GetMethodID(lineCls, "<init>", "(DLjava/lang/String;)V");
+
+    for (const auto& item : l.lines) {
+        jstring s = env->NewStringUTF(item.text.c_str());
+        jobject lineObj = env->NewObject(lineCls, lineCtor, (jdouble)item.time, s);
+        env->CallBooleanMethod(list, listAdd, lineObj);
+        env->DeleteLocalRef(s);
+        env->DeleteLocalRef(lineObj);
+    }
+
+    jclass resCls = env->FindClass("com/fmusic/LyricsData");
+    jmethodID resCtor = env->GetMethodID(resCls, "<init>", "(ZLjava/util/List;)V");
+    return env->NewObject(resCls, resCtor, (jboolean)l.synced, list);
+}
+
 } // extern "C"

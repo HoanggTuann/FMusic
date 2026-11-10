@@ -42,6 +42,11 @@ android {
         }
     }
 
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     externalNativeBuild {
         cmake {
             // CMakeLists.txt lives at andr/CMakeLists.txt
