@@ -14,17 +14,38 @@ android {
         targetSdk = 35
         versionCode = 11
         versionName = "1.1"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+
         externalNativeBuild {
-            cmake { cppFlags("-std=c++17") }
+            cmake {
+                cppFlags("-std=c++17")
+                arguments("-DANDROID_STL=c++_shared")
+            }
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs", "libs")
         }
     }
 
     buildFeatures { compose = true }
 
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
     externalNativeBuild {
         cmake {
-            // CMakeLists.txt lives at android/CMakeLists.txt (project root of android/)
-            path("CMakeLists.txt")
+            // CMakeLists.txt lives at andr/CMakeLists.txt
+            path("../CMakeLists.txt")
         }
     }
 
@@ -51,6 +72,6 @@ dependencies {
     // MediaSession / MediaCompat support
     implementation("androidx.media:media:1.7.0")
 
-    // Coil for image loading + BlurTransformation for ambient blur backgrounds
+    // Coil for image loading + blur ambient backgrounds
     implementation("io.coil-kt:coil-compose:2.7.0")
 }
