@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/app/libs
-          key: ffmpeg-android-arm64-v7.1
+          key: ffmpeg-android-arm64-v7.1-r3
 
       - name: Build Android FFmpeg
         if: steps.ffmpeg-android-cache.outputs.cache-hit != 'true'
@@ -37,7 +37,6 @@ jobs:
             exit 0
           fi
 
-          # Find NDK on runner
           NDK=$(ls -d /usr/local/lib/android/sdk/ndk/* 2>/dev/null | sort -V | tail -n 1)
           if [ -z "$NDK" ]; then
             echo "Installing NDK..."
@@ -84,6 +83,7 @@ jobs:
             --disable-avdevice \
             --disable-avfilter \
             --disable-everything \
+            --enable-swscale \
             --enable-decoder="$DECODERS" \
             --enable-demuxer="$DEMUXERS" \
             --enable-parser="$PARSERS" \
@@ -96,8 +96,8 @@ jobs:
           make install-libs install-headers
           cd ..
 
-          cp ffmpeg-out/lib/lib*.so android/app/libs/arm64-v8a/
-          cp -R ffmpeg-out/include/* android/app/libs/include/
+          cp -L ffmpeg-out/lib/lib*.so android/app/libs/arm64-v8a/
+          cp -L -R ffmpeg-out/include/* android/app/libs/include/
           echo "FFmpeg arm64-v8a installed successfully:"
           ls -la android/app/libs/arm64-v8a/
 
