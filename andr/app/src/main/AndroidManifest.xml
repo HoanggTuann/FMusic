@@ -14,7 +14,7 @@
     <application
         android:allowBackup="true"
         android:label="FMusic"
-        android:theme="@style/Theme.FMusic">
+        android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
             android:name=".MainActivity"
