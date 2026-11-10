@@ -1,25 +1,42 @@
-name: Build Android
+name: Build Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [ main, master ]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install FFmpeg development headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
 
-      - name: Build Release APK
-        run: cd android && ./gradlew assembleRelease
+      - name: Grant execute permission for gradlew
+        run: chmod +x andr/gradlew
+
+      - name: Build Android APK
+        run: |
+          cd andr
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FMusic-Android-Release
+          path: andr/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
