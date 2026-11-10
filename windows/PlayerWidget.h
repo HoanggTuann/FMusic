@@ -88,7 +88,7 @@ private:
     QRectF eqToggleRect() const;
     EqGeom eqGeom() const;
     void   setEqFromY(int band, double y);
-    void   loadEq();;
+    void   loadEq();
     void   saveEq();
     void   layoutLyrics(double width);
     void   loadSettings();

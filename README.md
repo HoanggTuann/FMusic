@@ -123,6 +123,6 @@ C:\Qt\6.7.2\msvc2019_64\bin\windeployqt.exe build\Release\FMusic.exe
 3. Open `FMusic.xcodeproj` in Xcode and run on device or simulator.
 
 ### 3. Android Deployment (Android Studio / Gradle)
-1. Open the `android/` directory in Android Studio (Giraffe+ / Ladybug+).
+1. Open the `andr/` directory in Android Studio (Giraffe+ / Ladybug+).
 2. Ensure Android NDK (r25+) and CMake (3.22+) are installed.
 3. Build & Run: `./gradlew assembleDebug` or run directly on device.

@@ -1,6 +1,6 @@
 ; Trình cài đặt FMusic (Inno Setup 6). Build: ISCC.exe /DMyAppVersion=0.3.0 installer\FMusic.iss
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.0"
+  #define MyAppVersion "1.1.0"
 #endif
 
 [Setup]

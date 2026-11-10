@@ -95,7 +95,9 @@ final class PlayerViewModel: NSObject, ObservableObject {
     private var scopedURL: URL?
     private var lrcByName: [String: URL] = [:]
     private var link: CADisplayLink?
+    private var backgroundTimer: DispatchSourceTimer?
     private var bandBuffer = [Float](repeating: 0, count: 64)
+    private var hasHandledEnd = false
 
     override init() {
         super.init()
@@ -107,11 +109,13 @@ final class PlayerViewModel: NSObject, ObservableObject {
         loadUserPresets()
         configureAudio()
         configureRemoteCommands()
+        startBackgroundMonitoring()
         link = CADisplayLink(target: self, selector: #selector(tick))
         link?.add(to: .main, forMode: .common)
     }
 
     deinit {
+        backgroundTimer?.cancel()
         link?.invalidate()
         engine.stop()
         scopedURL?.stopAccessingSecurityScopedResource()
@@ -136,12 +140,15 @@ final class PlayerViewModel: NSObject, ObservableObject {
         // TASK 2: Use dynamic sample rate
         let format = AVAudioFormat(standardFormatWithSampleRate: Double(sampleRate), channels: 2)!   // float32 planar
         let core = self.core
-        sourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, abl -> OSStatus in
+        sourceNode = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, abl -> OSStatus in
             let list = UnsafeMutableAudioBufferListPointer(abl)
             guard list.count >= 2, let l = list[0].mData, let r = list[1].mData else { return noErr }
             core.pullLeft(l.assumingMemoryBound(to: Float.self),
                           right: r.assumingMemoryBound(to: Float.self),
                           frames: Int(frameCount))
+            if core.ended {
+                self?.handlePlaybackEnded()
+            }
             return noErr
         }
         engine.attach(sourceNode)
@@ -180,6 +187,29 @@ final class PlayerViewModel: NSObject, ObservableObject {
         if let node = sourceNode { engine.detach(node) }
         configureAudio() // reinit with new SR
         UserDefaults.standard.set(sr, forKey: "sampleRate")
+    }
+
+    // MARK: Background playback handling (khi tắt màn hình / khoá máy)
+    private func startBackgroundMonitoring() {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            if self.isPlaying && self.core.ended {
+                self.handlePlaybackEnded()
+            }
+        }
+        timer.resume()
+        backgroundTimer = timer
+    }
+
+    private func handlePlaybackEnded() {
+        guard !hasHandledEnd, isPlaying else { return }
+        hasHandledEnd = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isPlaying else { return }
+            self.next(automatic: true)
+        }
     }
 
     // MARK: Danh sách phát
@@ -320,6 +350,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
         guard tracks.indices.contains(index) else { return }
         scopedURL?.stopAccessingSecurityScopedResource()
         currentIndex = index
+        hasHandledEnd = false
         let url = tracks[index].url
         _ = url.startAccessingSecurityScopedResource()     // giữ quyền truy cập suốt thời gian phát
         scopedURL = url
@@ -546,13 +577,14 @@ final class PlayerViewModel: NSObject, ObservableObject {
     }
 
     func seek(_ seconds: Double) {
+        hasHandledEnd = false
         core.seekToSeconds(seconds)
         position = seconds
         // TASK 1: Cập nhật Now Playing sau khi tua
         updateNowPlaying()
     }
 
-    // MARK: 60 Hz tick
+    // MARK: 60 Hz tick (chỉ chạy khi sáng màn hình)
     @objc private func tick() {
         let bass = core.copySpectrum(&bandBuffer, count: bandBuffer.count)
         spectrum.bands = bandBuffer
@@ -565,7 +597,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
             let idx = lyricIndex(at: p + 0.05 + offset)
             if idx != currentLyric { currentLyric = idx }
         }
-        if isPlaying && core.ended { next(automatic: true) }         // tự chuyển bài / dừng cuối danh sách
+        if isPlaying && core.ended { handlePlaybackEnded() }         // tự chuyển bài
     }
 
     // MARK: Lock screen / Control Center
