@@ -25,7 +25,7 @@ struct LyricsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                                 .id(line.id)
-                                .onTapGesture { if vm.lyricsSynced && line.time >= 0 { vm.seek(max(0, line.time - UserDefaults.standard.double(forKey: "lyricOffsetMs") / 1000)) } }   // chạm 1 dòng để tua tới đó
+                                .onTapGesture { if vm.lyricsSynced && line.time >= 0 { vm.seek(max(0, line.time - UserDefaults.standard.double(forKey: "lyricOffsetMs") / 1000)) } }
                         }
                     }
                     .padding(.horizontal, 24)
@@ -90,7 +90,7 @@ struct QueueView: View {
                         .listRowBackground(i == vm.currentIndex ? Color.white.opacity(0.16) : Color.clear)
                         .listRowSeparator(.hidden)
                     }
-                    .onDelete { vm.removeTracks(at: $0) }          // vuốt trái để xoá
+                    .onDelete { vm.removeTracks(at: $0) }
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
@@ -112,6 +112,11 @@ struct QueueView: View {
 // MARK: - Equalizer
 struct EQView: View {
     @ObservedObject var vm: PlayerViewModel
+    @State private var showSaveAlert = false
+    @State private var presetName = ""
+    @State private var exportURL: URL? = nil
+    @State private var showShareSheet = false
+
     private let freqs = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
     private let presets = MusicPlayerCore.eqPresetNames()
 
@@ -123,6 +128,8 @@ struct EQView: View {
                 Toggle("", isOn: Binding(get: { vm.eqEnabled }, set: { vm.setEqEnabled($0) }))
                     .labelsHidden().tint(.green)
             }
+
+            // Presets mặc định
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(presets.indices, id: \.self) { i in
@@ -136,6 +143,30 @@ struct EQView: View {
                     }
                 }
             }
+
+            // Presets của người dùng (.FEQ)
+            if !vm.userPresets.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(vm.userPresets.indices, id: \.self) { i in
+                            let p = vm.userPresets[i]
+                            Button {
+                                for (band, g) in p.gains.enumerated() { vm.setEqGain(band, g) }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "bookmark.fill").font(.system(size: 10))
+                                    Text(p.name).font(.system(size: 13, weight: .semibold))
+                                }
+                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                .background(Color.white.opacity(0.22), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+
+            // 10 thanh trượt
             HStack(spacing: 0) {
                 ForEach(0..<10, id: \.self) { b in
                     EQBandSlider(gain: vm.eqGains[b], label: freqs[b],
@@ -143,13 +174,62 @@ struct EQView: View {
                                  onReset: { vm.setEqGain(b, 0) })
                 }
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 280)
             .opacity(vm.eqEnabled ? 1 : 0.45)
+
+            // Nút Lưu Preset và Xuất .FEQ
+            HStack(spacing: 12) {
+                Button {
+                    showSaveAlert = true
+                } label: {
+                    Label("Lưu preset", systemImage: "square.and.arrow.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Color.white.opacity(0.16), in: Capsule())
+                }
+
+                Button {
+                    if let url = vm.exportPreset(name: "FMusic_Preset") {
+                        exportURL = url
+                        showShareSheet = true
+                    }
+                } label: {
+                    Label("Xuất .FEQ", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Color.white.opacity(0.16), in: Capsule())
+                }
+            }
+            .buttonStyle(.plain)
+
             Text("Kéo để chỉnh · chạm hai lần để về 0 dB").font(.footnote).opacity(0.5)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
+        .alert("Lưu Preset EQ", isPresented: $showSaveAlert) {
+            TextField("Tên preset", text: $presetName)
+            Button("Lưu") {
+                if !presetName.trimmingCharacters(in: .whitespaces).isEmpty {
+                    vm.saveCurrentAsPreset(name: presetName.trimmingCharacters(in: .whitespaces))
+                    presetName = ""
+                }
+            }
+            Button("Huỷ", role: .cancel) { presetName = "" }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let exportURL {
+                ShareSheet(items: [exportURL])
+            }
+        }
     }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 struct EQBandSlider: View {

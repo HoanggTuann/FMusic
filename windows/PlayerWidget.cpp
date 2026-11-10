@@ -8,6 +8,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QMediaDevices>
@@ -36,6 +37,8 @@
 #include "AudioDecoder.h"
 #include "CoverArt.h"
 #include "Equalizer.h"
+#include "EqPreset.h"
+#include "PlaylistFile.h"
 
 namespace {
 constexpr int    kBands = Player::kBands;
@@ -76,20 +79,22 @@ void boxBlur(QImage& img, int r, int passes = 3) {   // 3 lần box ≈ Gaussian
     for (int i = 0; i < passes; ++i) { boxBlurPass(img, r, true); boxBlurPass(img, r, false); }
 }
 
-// Ảnh nền ambient: thu nhỏ còn 40x40, blur, tăng bão hoà, hạ sáng nhẹ. Khi phóng to toàn màn hình sẽ rất mịn.
+// v1.1 Blur nâng cấp: thu nhỏ 120x120, blur bán kính 12 (3 lượt ≈ Gaussian sâu), tăng bão hoà 1.5, hạ sáng -12% (đồng bộ chuẩn CoreImage của iOS)
 QImage makeBackdrop(const QImage& cover) {
-    QImage s = cover.scaled(40, 40, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation)
+    if (cover.isNull()) return QImage();
+    QImage s = cover.scaled(120, 120, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation)
                     .convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    s = s.copy((s.width() - 40) / 2, (s.height() - 40) / 2, 40, 40);
-    boxBlur(s, 3, 3);
-    for (int y = 0; y < s.height(); ++y)
+    s = s.copy((s.width() - 120) / 2, (s.height() - 120) / 2, 120, 120);
+    boxBlur(s, 12, 3);
+    for (int y = 0; y < s.height(); ++y) {
         for (int x = 0; x < s.width(); ++x) {
             QColor c = s.pixelColor(x, y);
             float h, sat, v, a;
             c.getHsvF(&h, &sat, &v, &a);
-            c.setHsvF(h < 0 ? 0 : h, std::min(1.f, sat * 1.45f), std::min(1.f, v * 0.95f), a);
+            c.setHsvF(h < 0 ? 0 : h, std::min(1.f, sat * 1.50f), std::min(1.f, v * 0.88f), a);
             s.setPixelColor(x, y, c);
         }
+    }
     return s;
 }
 
@@ -126,7 +131,6 @@ QString formatTime(double s) {
     return QString("%1:%2").arg(t / 60).arg(t % 60, 2, 10, QChar('0'));
 }
 } // namespace
-// =====================================================================================
 
 namespace {
 constexpr double kRowH = 58.0;
@@ -151,21 +155,9 @@ PlayerWidget::PlayerWidget(QWidget* parent) : QWidget(parent) {
     title_  = QStringLiteral("Chưa có bài hát");
     artist_ = QStringLiteral("Kéo thả tệp nhạc vào đây hoặc nhấn O");
 
-    // ----- Audio output (Qt Multimedia / WASAPI), float32 stereo 44.1 kHz -----
-    QAudioFormat fmt;
-    fmt.setSampleRate(Player::kSampleRate);
-    fmt.setChannelCount(2);
-    fmt.setSampleFormat(QAudioFormat::Float);
-    const QAudioDevice dev = QMediaDevices::defaultAudioOutput();
-    if (!dev.isFormatSupported(fmt)) qWarning("Thiết bị âm thanh không hỗ trợ float32 44.1k trực tiếp (Qt sẽ chuyển đổi).");
-    sink_ = new QAudioSink(dev, fmt, this);
-    sink_->setBufferSize(Player::kSampleRate / 10 * 2 * int(sizeof(float)));   // ~100 ms
-    pcm_ = new PcmDevice(player_, this);
-    pcm_->open(QIODevice::ReadOnly);
-    sink_->start(pcm_);                          // chạy liên tục; Player tự xuất im lặng khi pause
-
-    loadEq();
     loadSettings();
+    initAudioSink();
+    loadEq();
 
     connect(&tick_, &QTimer::timeout, this, [this] { onTick(); });
     tick_.start(100);
@@ -179,6 +171,32 @@ PlayerWidget::PlayerWidget(QWidget* parent) : QWidget(parent) {
 PlayerWidget::~PlayerWidget() {
     unregisterHotkeys();
     if (sink_) sink_->stop();    // dừng audio thread trước khi Player bị huỷ
+}
+
+void PlayerWidget::initAudioSink() {
+    if (sink_) {
+        sink_->stop();
+        delete sink_;
+        sink_ = nullptr;
+    }
+    if (pcm_) {
+        delete pcm_;
+        pcm_ = nullptr;
+    }
+    QAudioFormat fmt;
+    fmt.setSampleRate(sampleRate_);
+    fmt.setChannelCount(2);
+    fmt.setSampleFormat(QAudioFormat::Float);
+    const QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    if (!dev.isFormatSupported(fmt)) {
+        qWarning("Thiết bị âm thanh không hỗ trợ float32 %d trực tiếp (Qt sẽ chuyển đổi).", sampleRate_);
+    }
+    sink_ = new QAudioSink(dev, fmt, this);
+    sink_->setBufferSize(sampleRate_ / 10 * 2 * int(sizeof(float)));   // ~100 ms
+    pcm_ = new PcmDevice(player_, this);
+    pcm_->open(QIODevice::ReadOnly);
+    sink_->start(pcm_);
+    applyVolume();
 }
 
 // ------------------------------- danh sách phát -------------------------------
@@ -301,7 +319,7 @@ void PlayerWidget::setCover(const QImage& src) {
         QFont f("Segoe UI Symbol"); f.setPixelSize(260); q.setFont(f);
         q.drawText(img.rect(), Qt::AlignCenter, QStringLiteral("♪"));
     }
-    // Cắt vuông giữa + bo góc anti-alias một lần (tỉ lệ bo không đổi khi đổi kích thước)
+    // Cắt vuông giữa + bo góc anti-alias một lần
     const int minSide = std::min(img.width(), img.height());
     const int side = std::min(minSide, 900);
     const QImage sq = img.copy((img.width() - minSide) / 2, (img.height() - minSide) / 2, minSide, minSide)
@@ -351,106 +369,194 @@ void PlayerWidget::togglePlay() {
 }
 
 void PlayerWidget::openDialog(bool append) {
-    const QStringList f = QFileDialog::getOpenFileNames(
-        this, QStringLiteral("Chọn nhạc"), QString(),
-        QStringLiteral("Âm thanh (*.mp3 *.flac *.m4a *.aac *.wav *.ogg *.opus *.wma *.ape *.aiff *.wv);;Tất cả (*)"));
-    if (append) addFiles(f); else openFiles(f);
+    const QString filter = QStringLiteral(
+        "Tất cả được hỗ trợ (*.mp3 *.flac *.m4a *.aac *.wav *.ogg *.opus *.wma *.ape *.aiff *.wv *.fpl);;"
+        "Danh sách phát FMusic (*.fpl);;"
+        "Tệp âm thanh (*.mp3 *.flac *.m4a *.aac *.wav *.ogg *.opus *.wma *.ape *.aiff *.wv);;"
+        "Mọi tệp (*)");
+    const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("Mở nhạc hoặc danh sách phát"), QString(), filter);
+    if (files.isEmpty()) return;
+
+    if (files.size() == 1 && files.first().endsWith(QStringLiteral(".fpl"), Qt::CaseInsensitive)) {
+        loadPlaylist(files.first());
+        return;
+    }
+    if (append) addFiles(files); else openFiles(files);
 }
 
-void PlayerWidget::onTick() {
-    updateMedia();
-    if (player_.playing() && player_.ended()) next(true);                            // tự chuyển bài
-
-    // Đọc metadata nền cho danh sách phát: tối đa 2 tệp mỗi 100 ms
-    int budget = 2;
-    while (budget > 0 && probeCursor_ < playlist_.size()) {
-        Track& t = playlist_[probeCursor_++];
-        if (t.probed) continue;
-        TrackInfo ti;
-        if (AudioDecoder::probe(t.path.toUtf8().toStdString(), ti)) {
-            t.title = fromUtf8(ti.title);
-            t.artist = fromUtf8(ti.artist);
-            t.duration = ti.duration;
-        }
-        t.probed = true;
-        --budget;
+// v1.1 Streaming qua localhost / HTTP / HTTPS / Cloud direct links
+void PlayerWidget::openUrlDialog() {
+    bool ok = false;
+    const QString url = QInputDialog::getText(
+        this, QStringLiteral("Phát trực tuyến (Streaming)"),
+        QStringLiteral("Nhập URL stream (HTTP, HTTPS, Localhost, Google Drive direct link...):"),
+        QLineEdit::Normal, QStringLiteral("http://localhost:8080/"), &ok);
+    if (ok && !url.trimmed().isEmpty()) {
+        Track t;
+        t.path = url.trimmed();
+        t.title = t.path;
+        playlist_.push_back(t);
+        loadIndex(playlist_.size() - 1, true);
     }
 }
 
-// ------------------------------- EQ lưu/đọc -------------------------------
+// v1.1 Lưu danh sách phát thành file .fpl (chỉ lưu đường dẫn, không sao chép nhạc)
+void PlayerWidget::savePlaylist() {
+    if (playlist_.isEmpty()) return;
+    const QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Lưu danh sách phát"), QString(),
+        QStringLiteral("Danh sách phát FMusic (*.fpl)"));
+    if (path.isEmpty()) return;
 
-void PlayerWidget::loadEq() {
-    QSettings s("FMusic", "Player");
-    Equalizer& eq = player_.eq();
-    const QStringList g = s.value("eq/gains").toStringList();
-    for (int i = 0; i < Equalizer::kBands && i < g.size(); ++i) eq.setGain(i, g[i].toFloat());
-    eq.setEnabled(s.value("eq/enabled", false).toBool());
-    eqPreset_ = s.value("eq/preset", 0).toInt();
+    std::vector<std::string> paths;
+    paths.reserve(playlist_.size());
+    for (const Track& t : playlist_) paths.push_back(t.path.toUtf8().toStdString());
+    if (PlaylistFile::save(path.toUtf8().toStdString(), paths)) {
+        lastPlaylistPath_ = path;
+    }
 }
 
-void PlayerWidget::saveEq() {
-    QSettings s("FMusic", "Player");
-    Equalizer& eq = player_.eq();
-    QStringList g;
-    for (int i = 0; i < Equalizer::kBands; ++i) g << QString::number(double(eq.gain(i)));
-    s.setValue("eq/gains", g);
-    s.setValue("eq/enabled", eq.enabled());
-    s.setValue("eq/preset", eqPreset_);
+void PlayerWidget::loadPlaylist(const QString& path) {
+    std::vector<std::string> paths;
+    if (PlaylistFile::load(path.toUtf8().toStdString(), paths)) {
+        QStringList list;
+        for (const auto& p : paths) list.append(QString::fromUtf8(p.c_str()));
+        openFiles(list);
+        lastPlaylistPath_ = path;
+    }
 }
 
-void PlayerWidget::setEqFromY(int band, double y) {
-    const EqGeom g = eqGeom();
-    const double f = std::clamp((y - g.top) / g.h, 0.0, 1.0);
-    double db = 12.0 - 24.0 * f;
-    db = std::round(db * 2.0) / 2.0;                 // bước 0.5 dB
-    if (std::abs(db) < 0.4) db = 0.0;
-    Equalizer& eq = player_.eq();
-    eq.setGain(band, float(db));
-    eq.setEnabled(true);
-    eqPreset_ = -1;
+// v1.1 Lưu / Tải EQ Preset định dạng FEQ (JSON)
+void PlayerWidget::saveEqPreset() {
+    const QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Xuất Preset Equalizer"), QStringLiteral("Preset.feq"),
+        QStringLiteral("Preset FMusic EQ (*.feq)"));
+    if (path.isEmpty()) return;
+
+    const QString baseName = QFileInfo(path).completeBaseName();
+    player_.eq().savePreset(path.toUtf8().toStdString(), baseName.toUtf8().toStdString());
 }
 
-// ------------------------------- input -------------------------------
+void PlayerWidget::loadEqPreset(const QString& path) {
+    QString p = path;
+    if (p.isEmpty()) {
+        p = QFileDialog::getOpenFileName(
+            this, QStringLiteral("Nhập Preset Equalizer"), QString(),
+            QStringLiteral("Preset FMusic EQ (*.feq);;Tất cả (*)"));
+    }
+    if (p.isEmpty()) return;
+    if (player_.eq().loadPreset(p.toUtf8().toStdString())) {
+        eqPreset_ = -1;     // chế độ preset tuỳ chỉnh
+        player_.eq().setEnabled(true);
+        saveEq();
+    }
+}
 
-void PlayerWidget::togglePanel(Panel p) {
-    panel_ = (panel_ == p) ? Panel::None : p;
-    if (panel_ != Panel::None) shownPanel_ = panel_;
+void PlayerWidget::onTick() {
+    // Probe metadata ngầm
+    if (probeCursor_ < playlist_.size()) {
+        Track& t = playlist_[probeCursor_++];
+        if (!t.probed) {
+            TrackInfo info;
+            if (AudioDecoder::probe(t.path.toUtf8().toStdString(), info)) {
+                if (!info.title.empty()) t.title = fromUtf8(info.title);
+                t.artist = fromUtf8(info.artist);
+                t.duration = info.duration;
+            }
+            t.probed = true;
+        }
+    }
+    if (player_.playing() && player_.ended()) next(true);
+    updateMedia();
 }
 
 void PlayerWidget::updateDrag(double x) {
+    if (player_.duration() <= 0) return;
     const double f = std::clamp((x - progRect_.left()) / progRect_.width(), 0.0, 1.0);
     dragPos_ = f * player_.duration();
 }
 
+void PlayerWidget::togglePanel(Panel p) {
+    if (panel_ == p) panel_ = Panel::None;
+    else { panel_ = p; shownPanel_ = p; }
+}
+
 void PlayerWidget::handlePanelPress(const QPointF& pt, Qt::MouseButton b) {
-    Equalizer& eq = player_.eq();
-    switch (panel_) {
+    switch (shownPanel_) {
     case Panel::Lyrics: {
-        if (b != Qt::LeftButton || !lyrics_.synced() || lyricY_.size() != int(lyrics_.lines().size())) break;
-        const double y = pt.y() - panelInner().top() + lyricScroll_;
-        for (int i = 0; i < lyricY_.size(); ++i)
-            if (y >= lyricY_[i] && y < lyricY_[i] + lyricH_[i] + 22.0) { player_.seek(std::max(0.0, lyrics_.lines()[size_t(i)].time - setLyricOffsetMs_ / 1000.0)); break; }
+        if (b != Qt::LeftButton) break;
+        const auto& lines = lyrics_.lines();
+        for (int i = 0; i < lyricH_.size() && i < int(lines.size()); ++i) {
+            const QRectF r(panelInner().left(), listTop() + lyricY_[i] - lyricScroll_, panelInner().width(), lyricH_[i]);
+            if (r.contains(pt) && lines[i].time >= 0) {
+                player_.seek(std::max(0.0, lines[i].time - setLyricOffsetMs_ / 1000.0));
+                lyricSnap_ = true;
+                break;
+            }
+        }
         break;
     }
     case Panel::Queue: {
-        if (b == Qt::LeftButton && queueAddRect().contains(pt))   { openDialog(true); break; }
-        if (b == Qt::LeftButton && queueClearRect().contains(pt)) { clearPlaylist(); break; }
-        const int r = rowAt(pt);
-        if (r >= 0) { if (b == Qt::LeftButton) loadIndex(r, true); else if (b == Qt::RightButton) removeTrack(r); }
+        if (b == Qt::LeftButton) {
+            if (queueClearRect().contains(pt)) { clearPlaylist(); break; }
+            if (queueAddRect().contains(pt))   { openDialog(true); break; }
+            const int r = rowAt(pt);
+            if (r >= 0) loadIndex(r, true);
+        } else if (b == Qt::RightButton) {
+            const int r = rowAt(pt);
+            if (r >= 0) removeTrack(r);
+        }
         break;
     }
     case Panel::Eq: {
         if (b != Qt::LeftButton) break;
-        if (eqToggleRect().contains(pt)) { eq.setEnabled(!eq.enabled()); saveEq(); break; }
-        for (int i = 0; i < Equalizer::kPresetCount; ++i)
-            if (presetRect(i).contains(pt)) { eq.applyPreset(i); eq.setEnabled(true); eqPreset_ = i; saveEq(); return; }
+        if (eqToggleRect().contains(pt)) {
+            player_.eq().setEnabled(!player_.eq().enabled());
+            saveEq();
+            break;
+        }
+        if (eqSaveRect_.contains(pt)) {
+            saveEqPreset();
+            break;
+        }
+        if (eqExportRect_.contains(pt)) {
+            loadEqPreset(QString());
+            break;
+        }
+        for (int i = 0; i < Equalizer::kPresetCount; ++i) {
+            if (presetRect(i).contains(pt)) {
+                eqPreset_ = i;
+                player_.eq().applyPreset(i);
+                player_.eq().setEnabled(true);
+                saveEq();
+                break;
+            }
+        }
         const EqGeom g = eqGeom();
-        for (int k = 0; k < Equalizer::kBands; ++k)
-            if (QRectF(g.left + k * g.colW, g.top - 12, g.colW, g.h + 24).contains(pt)) { eqDrag_ = k; setEqFromY(k, pt.y()); break; }
+        for (int k = 0; k < Equalizer::kBands; ++k) {
+            if (QRectF(g.left + k * g.colW, g.top - 12, g.colW, g.h + 24).contains(pt)) {
+                eqDrag_ = k;
+                setEqFromY(k, pt.y());
+                break;
+            }
+        }
         break;
     }
     case Panel::Settings: {
         if (b != Qt::LeftButton) break;
+        // Kiểm tra nút sample rate (hàng 4)
+        for (int i = 0; i < 3; ++i) {
+            if (srRects_[i].contains(pt)) {
+                const int rates[3] = { 44100, 48000, 96000 };
+                if (sampleRate_ != rates[i]) {
+                    sampleRate_ = rates[i];
+                    player_.setSampleRate(sampleRate_);
+                    initAudioSink();
+                    saveSettings();
+                }
+                return;
+            }
+        }
         for (int i = 0; i < 4; ++i) {
             const QRectF r = settingsRow(i);
             if (!r.contains(pt)) continue;
@@ -467,13 +573,17 @@ void PlayerWidget::handlePanelPress(const QPointF& pt, Qt::MouseButton b) {
 
 void PlayerWidget::mousePressEvent(QMouseEvent* e) {
     const QPointF pt = e->position();
-    static const Panel navPanels[5] = { Panel::None, Panel::Queue, Panel::Lyrics, Panel::Eq, Panel::Settings };
-    for (int k = 0; k < 5; ++k)
+    // v1.1: Thứ tự nav chuẩn: 0=Đang phát, 1=Lời, 2=Danh sách, 3=EQ, 4=Cài đặt
+    static const Panel navPanels[5] = { Panel::None, Panel::Lyrics, Panel::Queue, Panel::Eq, Panel::Settings };
+    for (int k = 0; k < 5; ++k) {
         if (navRects_[k].contains(pt)) {
-            if (e->button() == Qt::LeftButton) { if (k == 0) panel_ = Panel::None; else togglePanel(navPanels[k]); }
+            if (e->button() == Qt::LeftButton) {
+                if (k == 0) panel_ = Panel::None;
+                else togglePanel(navPanels[k]);
+            }
             return;
         }
-    if (openRect_.contains(pt)) { if (e->button() == Qt::LeftButton) openDialog(false); return; }
+    }
     if (panelAnim_ > 0.5f && panelRect_.contains(pt)) { handlePanelPress(pt, e->button()); return; }
     if (e->button() != Qt::LeftButton) return;
     if (prevRect_.contains(pt)) { prev(); return; }
@@ -490,53 +600,61 @@ void PlayerWidget::mousePressEvent(QMouseEvent* e) {
 void PlayerWidget::mouseDoubleClickEvent(QMouseEvent* e) {
     if (panel_ == Panel::Eq && panelAnim_ > 0.5f && e->button() == Qt::LeftButton) {
         const EqGeom g = eqGeom();
-        for (int k = 0; k < Equalizer::kBands; ++k)
+        for (int k = 0; k < Equalizer::kBands; ++k) {
             if (QRectF(g.left + k * g.colW, g.top - 12, g.colW, g.h + 24).contains(e->position())) {
                 player_.eq().setGain(k, 0.f);                 // nhấp đúp = đưa băng về 0 dB
                 eqPreset_ = -1;
                 saveEq();
                 return;
             }
+        }
     }
-    mousePressEvent(e);
 }
 
 void PlayerWidget::mouseMoveEvent(QMouseEvent* e) {
     const QPointF pt = e->position();
-    if (dragging_) updateDrag(pt.x());
-    if (eqDrag_ >= 0) setEqFromY(eqDrag_, pt.y());
-    if (setDrag_ >= 0) setSettingFromX(setDrag_, pt.x());
+    if (dragging_) { updateDrag(pt.x()); return; }
+    if (eqDrag_ >= 0) { setEqFromY(eqDrag_, pt.y()); return; }
+    if (setDrag_ >= 0) { setSettingFromX(setDrag_, pt.x()); return; }
+
     hoverProg_ = progRect_.adjusted(-8, -14, 8, 14).contains(pt);
     hoverRow_ = (panel_ == Panel::Queue && panelAnim_ > 0.5f) ? rowAt(pt) : -1;
-    bool hand = hoverProg_ || hoverRow_ >= 0 || openRect_.contains(pt) || prevRect_.contains(pt) ||
+    bool hand = hoverProg_ || hoverRow_ >= 0 || prevRect_.contains(pt) ||
                 nextRect_.contains(pt) || playRect_.contains(pt) || shufRect_.contains(pt) || repRect_.contains(pt);
     for (const QRectF& r : navRects_) hand = hand || r.contains(pt);
     setCursor(hand ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 
-void PlayerWidget::mouseReleaseEvent(QMouseEvent*) {
-    if (dragging_) { player_.seek(dragPos_); dragging_ = false; }
-    if (eqDrag_ >= 0) { eqDrag_ = -1; saveEq(); }
-    if (setDrag_ >= 0) { setDrag_ = -1; saveSettings(); }
+void PlayerWidget::mouseReleaseEvent(QMouseEvent* e) {
+    if (dragging_ && e->button() == Qt::LeftButton) {
+        dragging_ = false;
+        player_.seek(dragPos_);
+    }
+    eqDrag_ = -1;
+    setDrag_ = -1;
 }
 
 void PlayerWidget::wheelEvent(QWheelEvent* e) {
-    if (panelAnim_ > 0.5f && panelRect_.contains(e->position())) {
-        const double dy = e->angleDelta().y() * 0.6;
-        const QRectF in = panelInner();
-        if (panel_ == Panel::Queue) {
-            const double maxScroll = std::max(0.0, playlist_.size() * kRowH - (in.bottom() - listTop()));
-            queueScroll_ = std::clamp(queueScroll_ - dy, 0.0, maxScroll);
-        } else if (panel_ == Panel::Lyrics && !lyrics_.synced()) {
-            lyricManual_ = std::clamp(lyricManual_ - dy, 0.0, std::max(0.0, lyricTotalH_ - in.height()));
-        }
-        e->accept();
-        return;
+    const double d = e->angleDelta().y();
+    if (panel_ == Panel::Lyrics && panelAnim_ > 0.5f) {
+        lyricScroll_ = std::clamp(lyricScroll_ - d * 0.7, 0.0, std::max(0.0, lyricTotalH_ - panelInner().height() + 100));
+        lyricSnap_ = false;
+        lyricManual_ = 3.0; // tạm dừng snap trong 3 giây
+    } else if (panel_ == Panel::Queue && panelAnim_ > 0.5f) {
+        queueScroll_ = std::clamp(queueScroll_ - d * 0.7, 0.0, std::max(0.0, playlist_.size() * kRowH - panelInner().height() + 80));
+    } else {
+        volume_ = std::clamp(volume_ + (d > 0 ? 0.04 : -0.04), 0.0, 1.0);
+        applyVolume();
+        saveSettings();
     }
-    QWidget::wheelEvent(e);
 }
 
 void PlayerWidget::keyPressEvent(QKeyEvent* e) {
+    if (e->modifiers() & Qt::ControlModifier) {
+        if (e->key() == Qt::Key_S) { savePlaylist(); return; }
+        if (e->key() == Qt::Key_O) { openDialog(false); return; }
+        if (e->key() == Qt::Key_U) { openUrlDialog(); return; }
+    }
     switch (e->key()) {
     case Qt::Key_Space: togglePlay(); break;
     case Qt::Key_Right: player_.seek(player_.position() + 5); break;
@@ -544,6 +662,7 @@ void PlayerWidget::keyPressEvent(QKeyEvent* e) {
     case Qt::Key_N:     next(false); break;
     case Qt::Key_P:     prev(); break;
     case Qt::Key_O:     openDialog(false); break;
+    case Qt::Key_U:     openUrlDialog(); break;
     case Qt::Key_L:     togglePanel(Panel::Lyrics); break;
     case Qt::Key_Q:     togglePanel(Panel::Queue); break;
     case Qt::Key_E:     togglePanel(Panel::Eq); break;
@@ -563,8 +682,20 @@ void PlayerWidget::dragEnterEvent(QDragEnterEvent* e) {
 
 void PlayerWidget::dropEvent(QDropEvent* e) {
     QStringList files;
-    for (const QUrl& u : e->mimeData()->urls())
-        if (u.isLocalFile()) files << u.toLocalFile();
+    for (const QUrl& u : e->mimeData()->urls()) {
+        if (u.isLocalFile()) {
+            const QString f = u.toLocalFile();
+            if (f.endsWith(QStringLiteral(".fpl"), Qt::CaseInsensitive)) {
+                loadPlaylist(f);
+                return;
+            }
+            if (f.endsWith(QStringLiteral(".feq"), Qt::CaseInsensitive)) {
+                loadEqPreset(f);
+                return;
+            }
+            files << f;
+        }
+    }
     openFiles(files);
 }
 
@@ -580,54 +711,88 @@ int PlayerWidget::rowAt(const QPointF& pt) const {
     return (r >= 0 && r < playlist_.size()) ? r : -1;
 }
 
-QRectF PlayerWidget::queueAddRect() const   { const QRectF in = panelInner(); return QRectF(in.right() - 64, in.top() + 3, 64, 28); }
-QRectF PlayerWidget::queueClearRect() const { const QRectF in = panelInner(); return QRectF(in.right() - 64 - 8 - 84, in.top() + 3, 84, 28); }
-QRectF PlayerWidget::eqToggleRect() const   { const QRectF in = panelInner(); return QRectF(in.right() - 48, in.top() + 3, 48, 28); }
+QRectF PlayerWidget::queueAddRect() const {
+    const QRectF in = panelInner();
+    return QRectF(in.right() - 74, in.top() + 8, 74, 30);
+}
+
+QRectF PlayerWidget::queueClearRect() const {
+    const QRectF in = panelInner();
+    return QRectF(in.right() - 162, in.top() + 8, 80, 30);
+}
 
 QRectF PlayerWidget::presetRect(int i) const {
     const QRectF in = panelInner();
-    const double w = (in.width() - 16.0) / 3.0;
-    return QRectF(in.left() + (i % 3) * (w + 8.0), in.top() + 52.0 + (i / 3) * 38.0, w, 30.0);
+    const double w = (in.width() - 8 * 3) / 4.0;
+    const int row = i / 4, col = i % 4;
+    return QRectF(in.left() + col * (w + 8), in.top() + 50 + row * 36, w, 30);
+}
+
+QRectF PlayerWidget::eqToggleRect() const {
+    const QRectF in = panelInner();
+    return QRectF(in.right() - 48, in.top() + 4, 48, 28);
 }
 
 PlayerWidget::EqGeom PlayerWidget::eqGeom() const {
     const QRectF in = panelInner();
-    EqGeom g;
-    g.left = in.left();
-    g.colW = in.width() / Equalizer::kBands;
-    g.top = in.top() + 52.0 + 3 * 38.0 + 36.0;
-    g.h = std::clamp(in.bottom() - g.top - 40.0, 80.0, 260.0);
-    return g;
+    const double top = in.top() + 150.0;
+    const double h = std::max(120.0, in.bottom() - top - 70.0);
+    const double colW = in.width() / Equalizer::kBands;
+    return EqGeom{ in.left(), top, h, colW };
+}
+
+void PlayerWidget::setEqFromY(int band, double y) {
+    const EqGeom g = eqGeom();
+    const double f = std::clamp((y - g.top) / g.h, 0.0, 1.0);
+    const float db = float((1.0 - f) * 24.0 - 12.0);
+    player_.eq().setGain(band, db);
+    eqPreset_ = -1;
+    saveEq();
+}
+
+void PlayerWidget::loadEq() {
+    QSettings s("FMusic", "Player");
+    const bool on = s.value("eq/enabled", false).toBool();
+    player_.eq().setEnabled(on);
+    eqPreset_ = s.value("eq/preset", 0).toInt();
+    for (int i = 0; i < Equalizer::kBands; ++i) {
+        const float db = s.value(QString("eq/band_%1").arg(i), 0.0).toFloat();
+        player_.eq().setGain(i, db);
+    }
+}
+
+void PlayerWidget::saveEq() {
+    QSettings s("FMusic", "Player");
+    s.setValue("eq/enabled", player_.eq().enabled());
+    s.setValue("eq/preset", eqPreset_);
+    for (int i = 0; i < Equalizer::kBands; ++i)
+        s.setValue(QString("eq/band_%1").arg(i), player_.eq().gain(i));
 }
 
 void PlayerWidget::computeLayout() {
     const double W = width(), H = height();
-    const double panelW = std::min(430.0, W * 0.42);
-    mainX_ = kSidebarW;                                      // thanh bên trái
-    mainW_ = W - kSidebarW - panelW * panelAnim_;            // vùng chính co lại khi panel trượt ra
+    const double panelW = std::clamp(W * 0.46, 360.0, 520.0);
+    mainW_ = W - kSidebarW - panelW * panelAnim_;
+    mainX_ = kSidebarW;
+
+    const double availH = H - 220.0;
+    const double artSide = std::clamp(std::min(mainW_ * 0.58, availH), 180.0, 480.0);
     const double cx = mainX_ + mainW_ / 2;
+    const double cy = 40.0 + artSide / 2;
+    artRect_ = QRectF(cx - artSide / 2, cy - artSide / 2, artSide, artSide);
 
-    const double art  = std::clamp(std::min(mainW_ * 0.52, H * 0.40), 140.0, 560.0);
-    const double ring = art * 0.18;                         // chỗ cho vòng spectrum
-    const double textH = 64, progH = 46, ctrlH = 92;
-    const double total = ring + art + ring + textH + progH + ctrlH;
-    const double top = std::max(24.0, (H - total) / 2.0) + ring;
+    titleY_ = artRect_.bottom() + 18.0;
+    progRect_ = QRectF(cx - std::min(mainW_ * 0.72, 440.0) / 2, titleY_ + 62.0, std::min(mainW_ * 0.72, 440.0), 24.0);
 
-    artRect_ = QRectF(cx - art / 2, top, art, art);
-    double y = artRect_.bottom() + ring + 6;
-    titleY_ = y;
-    y += textH;
-    const double pw = std::min(mainW_ * 0.8, std::max(art * 1.5, 320.0));
-    progRect_ = QRectF(cx - pw / 2, y + 8, pw, 6);
-    y += progH;
-    const double cy = y + 38;
-    playRect_ = QRectF(cx - 32, cy - 32, 64, 64);
-    prevRect_ = QRectF(cx - 130, cy - 28, 56, 56);
-    nextRect_ = QRectF(cx + 74, cy - 28, 56, 56);
-    const double off = std::clamp(mainW_ / 2 - 24, 150.0, 215.0);
-    shufRect_ = QRectF(cx - off - 20, cy - 20, 40, 40);
-    repRect_  = QRectF(cx + off - 20, cy - 20, 40, 40);
-    openRect_ = QRectF(mainX_ + 18, 18, 40, 40);
+    const double ccy = progRect_.bottom() + 38.0;
+    playRect_ = QRectF(cx - 30, ccy - 30, 60, 60);
+    prevRect_ = QRectF(cx - 104, ccy - 22, 44, 44);
+    nextRect_ = QRectF(cx + 60, ccy - 22, 44, 44);
+    shufRect_ = QRectF(cx - 170, ccy - 18, 36, 36);
+    repRect_  = QRectF(cx + 134, ccy - 18, 36, 36);
+
+    // v1.1: Bỏ nút "+" ở trên đầu ứng dụng (đã có nút Thêm trong Queue)
+    openRect_ = QRectF();
 
     panelRect_ = QRectF(W - panelW * panelAnim_ + 4, 18, panelW - 22, H - 36);
     for (int k = 0; k < 5; ++k) navRects_[k] = QRectF(8, 74 + k * 68, kSidebarW - 16, 62);
@@ -635,41 +800,46 @@ void PlayerWidget::computeLayout() {
 
 void PlayerWidget::ensureShadow() {
     const int art = int(artRect_.width());
-    if (art == shadowArt_) return;
+    if (art == shadowArt_ && !shadowPix_.isNull()) return;
     shadowArt_ = art;
-    shadowPad_ = int(art * 0.30);
-    const int S = art + 2 * shadowPad_;
-    QImage img(S, S, QImage::Format_ARGB32_Premultiplied);
-    img.fill(Qt::transparent);
+    shadowPad_ = int(art * 0.18);
+    const int full = art + 2 * shadowPad_;
+    QImage sh(full, full, QImage::Format_ARGB32_Premultiplied);
+    sh.fill(Qt::transparent);
     {
-        QPainter q(&img);
+        QPainter q(&sh);
         q.setRenderHint(QPainter::Antialiasing);
         q.setPen(Qt::NoPen);
-        q.setBrush(QColor(0, 0, 0, 190));
-        q.drawRoundedRect(QRectF(shadowPad_, shadowPad_, art, art), art * kCorner, art * kCorner);
+        q.setBrush(QColor(0, 0, 0, 150));
+        q.drawRoundedRect(QRectF(shadowPad_, shadowPad_ + art * 0.06, art, art), art * kCorner, art * kCorner);
     }
-    boxBlur(img, std::max(2, art / 16), 3);               // đổ bóng mềm & sâu, chỉ tính lại khi đổi kích thước
-    shadowPix_ = QPixmap::fromImage(img);
+    boxBlur(sh, int(art * 0.08), 3);
+    shadowPix_ = QPixmap::fromImage(sh);
 }
 
-// ------------------------------- painting -------------------------------
+// ------------------------------- vẽ giao diện -------------------------------
 
 void PlayerWidget::paintEvent(QPaintEvent*) {
-    const qint64 ms = clock_.elapsed();
-    dt_ = std::min(0.1, (ms - lastMs_) / 1000.0);
-    lastMs_ = ms;
-    const double t = ms / 1000.0;
+    const qint64 now = clock_.elapsed();
+    dt_ = lastMs_ == 0 ? 0.016 : std::clamp(double(now - lastMs_) / 1000.0, 0.001, 0.1);
+    lastMs_ = now;
+    const double t = double(now) / 1000.0;
 
-    float bands[kBands];
+    // v1.1: Hoạt ảnh siêu mượt, loại bỏ khựng
+    bgAngle_ += float(dt_ * 3.5); // góc xoay nền ambient tăng liên tục
+    if (bgAngle_ > 3600.f) bgAngle_ -= 3600.f;
+
+    float bands[kBands] = {0};
     const float bass = player_.spectrum(bands);
-    bassSmooth_ += (bass - bassSmooth_) * 0.25f;
-    const float target = player_.playing() ? 1.0f : 0.86f;       // ảnh bìa thu nhỏ khi tạm dừng (như Apple Music)
+    bassSmooth_ += (bass - bassSmooth_) * float(std::min(1.0, dt_ * 12.0));
+
+    const float target = player_.playing() ? 1.0f : 0.86f;
     artScale_ += (target - artScale_) * float(std::min(1.0, dt_ * 9.0));
-    bgFade_ = std::min(1.f, bgFade_ + float(dt_ / 0.9));
+    bgFade_ = std::min(1.f, bgFade_ + float(dt_ / 0.85));
 
     const float panelTarget = panel_ != Panel::None ? 1.f : 0.f;
     panelAnim_ += (panelTarget - panelAnim_) * float(std::min(1.0, dt_ * 10.0));
-    if (std::abs(panelTarget - panelAnim_) < 0.004f) panelAnim_ = panelTarget;
+    if (std::abs(panelTarget - panelAnim_) < 0.003f) panelAnim_ = panelTarget;
 
     QPainter p(this);
     p.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing);
@@ -683,17 +853,20 @@ void PlayerWidget::paintEvent(QPaintEvent*) {
     drawPanel(p);
 }
 
+// v1.1: Ambient Background xoay 2 lớp counter-rotating mịn màng như iOS
 void PlayerWidget::drawBackdrop(QPainter& p, const QPixmap& pix, double t, double opacity) {
     if (pix.isNull() || opacity <= 0.0) return;
-    const double W = width(), H = height(), S = std::max(W, H) * 1.5;
+    const double W = width(), H = height(), S = std::max(W, H) * 1.65;
     p.save();
     p.setOpacity(opacity);
-    p.translate(W / 2 + std::sin(t * 0.07) * W * 0.04, H / 2 + std::cos(t * 0.05) * H * 0.04);
-    p.rotate(std::sin(t * 0.04) * 10.0);
+    // Lớp 1: xoay thuận với trôi dạt nhẹ
+    p.translate(W / 2 + std::sin(t * 0.06) * W * 0.03, H / 2 + std::cos(t * 0.04) * H * 0.03);
+    p.rotate(bgAngle_ * 0.35f + std::sin(t * 0.03) * 6.0);
     p.drawPixmap(QRectF(-S / 2, -S / 2, S, S), pix, pix.rect());
-    p.setOpacity(opacity * 0.55);                       // lớp thứ hai xoay ngược -> màu "loang" chuyển động
-    p.rotate(-std::sin(t * 0.06) * 30.0 + 55.0);
-    p.scale(1.15, 1.15);
+    // Lớp 2: xoay ngược, tỷ lệ lớn hơn để màu loang trộn
+    p.setOpacity(opacity * 0.55);
+    p.rotate(-bgAngle_ * 0.55f + 45.0);
+    p.scale(1.22, 1.22);
     p.drawPixmap(QRectF(-S / 2, -S / 2, S, S), pix, pix.rect());
     p.restore();
 }
@@ -701,7 +874,7 @@ void PlayerWidget::drawBackdrop(QPainter& p, const QPixmap& pix, double t, doubl
 void PlayerWidget::drawBackground(QPainter& p, double t) {
     p.fillRect(rect(), QColor(8, 8, 10));
     if (setAmbient_) {
-        if (bgFade_ < 1.f) drawBackdrop(p, bgPrev_, t, 1.0);        // cross-fade giữa 2 bài
+        if (bgFade_ < 1.f) drawBackdrop(p, bgPrev_, t, 1.0);
         drawBackdrop(p, bg_, t, bgFade_);
     } else {
         QLinearGradient base(0, 0, width(), height());
@@ -709,10 +882,10 @@ void PlayerWidget::drawBackground(QPainter& p, double t) {
         base.setColorAt(1, QColor(12, 12, 16));
         p.fillRect(rect(), base);
     }
-    p.fillRect(rect(), QColor(0, 0, 0, 95));                        // dim
+    p.fillRect(rect(), QColor(0, 0, 0, 95));                        // dim tối
     QLinearGradient g(0, 0, 0, height());                           // vignette
-    g.setColorAt(0.0, QColor(0, 0, 0, 20));
-    g.setColorAt(1.0, QColor(0, 0, 0, 130));
+    g.setColorAt(0.0, QColor(0, 0, 0, 25));
+    g.setColorAt(1.0, QColor(0, 0, 0, 135));
     p.fillRect(rect(), g);
 }
 
@@ -728,41 +901,48 @@ void PlayerWidget::drawArtAndSpectrum(QPainter& p, const float* bands) {
     p.translate(-c);
 
     // Drop shadow
-    p.drawPixmap(QPointF(artRect_.left() - shadowPad_, artRect_.top() - shadowPad_ + art * 0.06), shadowPix_);
+    if (!shadowPix_.isNull()) {
+        const double pad = shadowPad_;
+        p.drawPixmap(QRectF(artRect_.left() - pad, artRect_.top() - pad, shadowPix_.width(), shadowPix_.height()), shadowPix_);
+    }
 
-    // Album art (đã bo góc sẵn)
-    p.drawPixmap(artRect_, cover_, cover_.rect());
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1));
+    // Ảnh bìa
+    if (!cover_.isNull()) {
+        p.drawPixmap(artRect_, cover_, cover_.rect());
+    }
+
+    // Viền trắng mờ quanh bìa
+    p.setPen(QPen(QColor(255, 255, 255, 28), 1));
     p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(artRect_.adjusted(0.5, 0.5, -0.5, -0.5), art * kCorner, art * kCorner);
+    p.drawRoundedRect(artRect_, art * kCorner, art * kCorner);
 
-    // Spectrum bám theo đường viền bo góc: bass ở giữa cạnh trên, treble ở giữa cạnh dưới, đối xứng trái/phải
-    const double gap = art * 0.035, maxLen = art * 0.15;
-    const QRectF ring = artRect_.adjusted(-gap, -gap, gap, gap);
-    const double r = art * kCorner + gap;
-    const double P = 2 * (ring.width() - 2 * r) + 2 * (ring.height() - 2 * r) + 2 * kPi * r;
-    const int N = 96;
-    const double bw = std::max(2.0, P / N * 0.52);
-    for (int pass = 0; setSpectrum_ && pass < 2; ++pass) {              // pass 0: vầng sáng, pass 1: thanh chính
-        QPen pen;
-        pen.setCapStyle(Qt::RoundCap);
-        pen.setWidthF(pass == 0 ? bw * 2.4 : bw);
-        for (int k = 0; k < N; ++k) {
-            const double f = (k + 0.5) / N;
-            const double g = std::abs(f - 0.5) * 2.0;
-            const double x = g * (kBands - 1);
-            const int i0 = int(x), i1 = std::min(i0 + 1, kBands - 1);
-            const double v = bands[i0] * (1.0 - (x - i0)) + bands[i1] * (x - i0);
-            const PerimPt pt = perimeterPoint(ring, r, P * f);
-            const double len = 3.0 + std::pow(v, 1.2) * maxLen;
-            pen.setColor(QColor(255, 255, 255, pass == 0 ? int(38 * v) : int(70 + 160 * v)));
-            p.setPen(pen);
-            p.drawLine(pt.p, pt.p + pt.n * len);
+    // Spectrum ring (96 radial bars)
+    if (setSpectrum_) {
+        const double gap = art * 0.035, maxLen = art * 0.15;
+        const QRectF ring = artRect_.adjusted(-gap, -gap, gap, gap);
+        const double r = art * kCorner + gap;
+        const double P = 2 * (ring.width() - 2 * r) + 2 * (ring.height() - 2 * r) + 2 * kPi * r;
+        const int N = 96;
+        const double bw = std::max(2.0, P / N * 0.52);
+
+        for (int pass = 0; pass < 2; ++pass) {
+            QPen pen(Qt::white, pass == 0 ? bw * 2.4 : bw, Qt::SolidLine, Qt::RoundCap);
+            for (int k = 0; k < N; ++k) {
+                const double f = (k + 0.5) / N;
+                const double g = std::abs(f - 0.5) * 2.0;
+                const double x = g * (kBands - 1);
+                const int i0 = int(x), i1 = std::min(i0 + 1, kBands - 1);
+                const double v = bands[i0] * (1.0 - (x - i0)) + bands[i1] * (x - i0);
+                const PerimPt pt = perimeterPoint(ring, r, P * f);
+                const double len = 3.0 + std::pow(v, 1.2) * maxLen;
+                pen.setColor(QColor(255, 255, 255, pass == 0 ? int(38 * v) : int(70 + 160 * v)));
+                p.setPen(pen);
+                p.drawLine(pt.p, pt.p + pt.n * len);
+            }
         }
     }
     p.restore();
 }
-
 
 void PlayerWidget::drawTexts(QPainter& p) {
     const double cx = mainX_ + mainW_ / 2, art = artRect_.width();
@@ -809,13 +989,12 @@ void PlayerWidget::drawProgress(QPainter& p) {
                dur > 0 ? "-" + formatTime(dur - pos) : QString("-:--"));
 }
 
-
 void PlayerWidget::drawControls(QPainter& p) {
     const QColor col(255, 255, 255, 235);
-    p.setPen(QPen(col, 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));   // join tròn -> tam giác bo mềm
+    p.setPen(QPen(col, 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     p.setBrush(col);
 
-    auto skip = [&](QPointF c, bool forward) {            // 2 tam giác liên tiếp (⏮ / ⏭)
+    auto skip = [&](QPointF c, bool forward) {
         const double d = forward ? 1.0 : -1.0, w = 15, h = 22;
         const double start = c.x() - d * w * 0.975;
         for (int i = 0; i < 2; ++i) {
@@ -845,7 +1024,6 @@ void PlayerWidget::drawControls(QPainter& p) {
         p.drawPath(tri);
     }
 
-    // Shuffle / Repeat: sáng + chấm nhỏ bên dưới khi đang bật
     auto toggleGlyph = [&](const QRectF& r, const QString& g, bool on, const QString& badge) {
         QFont f("Segoe UI Symbol");
         f.setPixelSize(24);
@@ -865,19 +1043,10 @@ void PlayerWidget::drawControls(QPainter& p) {
     };
     toggleGlyph(shufRect_, QStringLiteral("⇄"), shuffle_, QString());
     toggleGlyph(repRect_, QStringLiteral("↻"), repeat_ != 0, repeat_ == 2 ? QStringLiteral("1") : QString());
-
-    // nút "+" mở nhạc
-    p.setPen(QPen(QColor(255, 255, 255, 200), 2, Qt::SolidLine, Qt::RoundCap));
-    p.setBrush(QColor(255, 255, 255, 28));
-    p.drawEllipse(openRect_);
-    const QPointF o = openRect_.center();
-    p.drawLine(o + QPointF(-7, 0), o + QPointF(7, 0));
-    p.drawLine(o + QPointF(0, -7), o + QPointF(0, 7));
-    p.setBrush(Qt::NoBrush);
 }
 
+// v1.1: Thứ tự Sidebar chuẩn: [Đang phát] -> [Lời] -> [Danh sách] -> [EQ] -> [Cài đặt]
 void PlayerWidget::drawSidebar(QPainter& p) {
-    // nền kính tối + đường viền phải
     p.fillRect(QRectF(0, 0, kSidebarW, height()), QColor(0, 0, 0, 95));
     p.setPen(QPen(QColor(255, 255, 255, 24), 1));
     p.drawLine(QPointF(kSidebarW - 0.5, 0), QPointF(kSidebarW - 0.5, height()));
@@ -886,8 +1055,9 @@ void PlayerWidget::drawSidebar(QPainter& p) {
     p.setPen(QColor(255, 255, 255, 235));
     p.drawText(QRectF(0, 20, kSidebarW, 22), Qt::AlignCenter, QStringLiteral("FMusic"));
 
-    static const char* const labels[5] = { "Đang phát", "Danh sách", "Lời", "EQ", "Cài đặt" };
-    static const Panel navPanels[5] = { Panel::None, Panel::Queue, Panel::Lyrics, Panel::Eq, Panel::Settings };
+    static const char* const labels[5] = { "Đang phát", "Lời", "Danh sách", "EQ", "Cài đặt" };
+    static const Panel navPanels[5] = { Panel::None, Panel::Lyrics, Panel::Queue, Panel::Eq, Panel::Settings };
+
     for (int k = 0; k < 5; ++k) {
         const QRectF r = navRects_[k];
         const bool on = panel_ == navPanels[k];
@@ -912,16 +1082,16 @@ void PlayerWidget::drawSidebar(QPainter& p) {
             p.drawLine(c + QPointF(-1, -8), c + QPointF(11, -11));
             break;
         }
-        case 1:                                             // danh sách
+        case 1:                                             // lời: dấu trích dẫn "Lời"
+            p.setFont(uiFont(28, true));
+            p.setPen(col);
+            p.drawText(QRectF(c.x() - 16, c.y() - 15, 32, 34), Qt::AlignCenter, QStringLiteral("“"));
+            break;
+        case 2:                                             // danh sách: 3 vạch
             for (int i = 0; i < 3; ++i) {
                 p.drawLine(c + QPointF(-3, -7 + i * 7), c + QPointF(10, -7 + i * 7));
                 p.drawPoint(c + QPointF(-10, -7 + i * 7));
             }
-            break;
-        case 2:                                             // lời: dấu trích dẫn
-            p.setFont(uiFont(30, true));
-            p.setPen(col);
-            p.drawText(QRectF(c.x() - 16, c.y() - 15, 32, 34), Qt::AlignCenter, QStringLiteral("“"));
             break;
         case 3:                                             // EQ: 3 thanh trượt
             for (int i = 0; i < 3; ++i) {
@@ -932,7 +1102,7 @@ void PlayerWidget::drawSidebar(QPainter& p) {
                 p.setBrush(Qt::NoBrush);
             }
             break;
-        default:                                            // bánh răng
+        default:                                            // bánh răng cài đặt
             p.drawEllipse(c, 4.5, 4.5);
             for (int i = 0; i < 8; ++i) {
                 const double a = i * 3.14159265358979 / 4;
@@ -949,20 +1119,18 @@ void PlayerWidget::drawSidebar(QPainter& p) {
 }
 
 void PlayerWidget::drawPanel(QPainter& p) {
-    if (panelAnim_ < 0.01f) return;
+    if (panelAnim_ <= 0.005f) return;
     p.save();
     p.setOpacity(panelAnim_);
-    QPainterPath bg;
-    bg.addRoundedRect(panelRect_, 20, 20);
-    p.fillPath(bg, QColor(0, 0, 0, 85));
-    p.setPen(QPen(QColor(255, 255, 255, 28), 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(bg);
-    p.setClipPath(bg);
+    // Nền kính mờ của panel
+    p.setPen(QPen(QColor(255, 255, 255, 30), 1));
+    p.setBrush(QColor(18, 18, 24, 215));
+    p.drawRoundedRect(panelRect_, 18, 18);
+
     switch (shownPanel_) {
-    case Panel::Lyrics: drawLyrics(p); break;
-    case Panel::Queue:  drawQueue(p);  break;
-    case Panel::Eq:     drawEq(p);     break;
+    case Panel::Lyrics:   drawLyrics(p);   break;
+    case Panel::Queue:    drawQueue(p);    break;
+    case Panel::Eq:       drawEq(p);       break;
     case Panel::Settings: drawSettings(p); break;
     default: break;
     }
@@ -979,10 +1147,10 @@ void PlayerWidget::layoutLyrics(double width) {
     for (size_t i = 0; i < lines.size(); ++i) {
         const QString s = fromUtf8(lines[i].text);
         const double h = s.isEmpty() ? fm.height() * 0.6
-                                     : double(fm.boundingRect(QRect(0, 0, int(width), 100000), Qt::TextWordWrap | Qt::AlignLeft, s).height());
-        lyricY_[int(i)] = y;
+                                     : fm.boundingRect(QRect(0, 0, int(width), 1000), Qt::TextWordWrap, s).height() + 18.0;
         lyricH_[int(i)] = h;
-        y += h + 22.0;
+        lyricY_[int(i)] = y;
+        y += h;
     }
     lyricTotalH_ = y;
     lyricLayoutW_ = int(width);
@@ -990,42 +1158,46 @@ void PlayerWidget::layoutLyrics(double width) {
 
 void PlayerWidget::drawLyrics(QPainter& p) {
     const QRectF in = panelInner();
-    if (lyrics_.empty()) {
-        p.setPen(QColor(255, 255, 255, 200));
-        p.setFont(uiFont(18, true));
-        p.drawText(in.adjusted(0, 0, 0, -30), Qt::AlignCenter, QStringLiteral("Không có lời bài hát"));
+    if (int(in.width()) != lyricLayoutW_) layoutLyrics(in.width());
+
+    const auto& lines = lyrics_.lines();
+    if (lines.empty()) {
         p.setPen(QColor(255, 255, 255, 120));
-        p.setFont(uiFont(13));
-        p.drawText(in.adjusted(10, 40, -10, 0), Qt::AlignHCenter | Qt::AlignVCenter | Qt::TextWordWrap,
-                   QStringLiteral("Đặt tệp .lrc cùng tên với tệp nhạc\n(vd: bai-hat.mp3 và bai-hat.lrc) hoặc dùng tệp có lời nhúng trong tag."));
+        p.setFont(uiFont(15));
+        p.drawText(in, Qt::AlignCenter | Qt::TextWordWrap,
+                   QStringLiteral("Không có lời bài hát\nThêm tệp .lrc cùng tên cạnh tệp nhạc hoặc dùng tệp có lời nhúng"));
         return;
     }
-    if (lyricLayoutW_ != int(in.width())) layoutLyrics(in.width());
 
-    const bool synced = lyrics_.synced();
-    const int cur = synced ? lyrics_.indexAt(player_.position() + 0.05 + setLyricOffsetMs_ / 1000.0) : -1;
-    double target;
-    if (synced) {
-        const int c = std::max(cur, 0);
-        target = lyricY_[c] + lyricH_[c] / 2 - in.height() * 0.4;
-    } else {
-        target = lyricManual_;
+    const double curT = player_.position() + setLyricOffsetMs_ / 1000.0;
+    int curIdx = -1;
+    if (lyrics_.synced()) {
+        for (int i = 0; i < int(lines.size()); ++i)
+            if (lines[size_t(i)].time <= curT) curIdx = i; else break;
     }
-    target = std::max(0.0, target);
-    if (lyricSnap_) { lyricScroll_ = target; lyricSnap_ = false; }
-    else lyricScroll_ += (target - lyricScroll_) * std::min(1.0, dt_ * 6.0);        // cuộn mượt
+
+    // Tự cuộn mượt
+    if (lyricSnap_ && curIdx >= 0 && curIdx < lyricY_.size()) {
+        const double targetY = lyricY_[curIdx] - in.height() * 0.35;
+        lyricScroll_ += (targetY - lyricScroll_) * std::min(1.0, dt_ * 5.0);
+    }
+    if (lyricManual_ > 0.0) {
+        lyricManual_ -= dt_;
+        if (lyricManual_ <= 0.0) lyricSnap_ = true;
+    }
 
     p.save();
-    p.setClipRect(in, Qt::IntersectClip);
-    p.setFont(uiFont(26, true));
-    for (int i = 0; i < lyricY_.size(); ++i) {
-        const double y = in.top() + lyricY_[i] - lyricScroll_;
+    p.setClipRect(in);
+    for (int i = 0; i < int(lines.size()); ++i) {
+        const double y = listTop() + lyricY_[i] - lyricScroll_;
         if (y + lyricH_[i] < in.top() || y > in.bottom()) continue;
-        int alpha = 215;
-        if (synced) alpha = (i == cur) ? 255 : std::max(60, 160 - 40 * std::abs(i - cur));
-        p.setPen(QColor(255, 255, 255, alpha));
-        p.drawText(QRectF(in.left(), y, in.width(), lyricH_[i]), Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop,
-                   fromUtf8(lyrics_.lines()[size_t(i)].text));
+
+        const bool act = (i == curIdx);
+        p.setFont(uiFont(act ? 26 : 22, act));
+        p.setPen(act ? QColor(255, 255, 255, 255) : QColor(255, 255, 255, 80));
+        const QString s = fromUtf8(lines[size_t(i)].text);
+        p.drawText(QRectF(in.left(), y, in.width(), lyricH_[i]),
+                   Qt::AlignLeft | Qt::TextWordWrap, s.isEmpty() ? QStringLiteral("♪") : s);
     }
     p.restore();
 }
@@ -1035,10 +1207,11 @@ void PlayerWidget::drawQueue(QPainter& p) {
     const QRectF in = panelInner();
     p.setPen(QColor(255, 255, 255, 240));
     p.setFont(uiFont(20, true));
-    p.drawText(QRectF(in.left(), in.top(), in.width() * 0.5, 30), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Danh sách phát"));
-    p.setPen(QColor(255, 255, 255, 125));
+    p.drawText(QRectF(in.left(), in.top(), in.width() * 0.5, 30), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("Danh sách phát"));
+    p.setPen(QColor(255, 255, 255, 120));
     p.setFont(uiFont(12));
-    p.drawText(QRectF(in.left(), in.top() + 30, in.width() * 0.6, 20), Qt::AlignLeft | Qt::AlignVCenter,
+    p.drawText(QRectF(in.left(), in.top() + 30, in.width() * 0.5, 20), Qt::AlignLeft | Qt::AlignVCenter,
                QString("%1 bài").arg(playlist_.size()));
 
     auto pill = [&](const QRectF& r, const QString& text) {
@@ -1075,10 +1248,14 @@ void PlayerWidget::drawQueue(QPainter& p) {
             p.drawRoundedRect(r, 10, 10);
             p.setBrush(Qt::NoBrush);
         }
-        // số thứ tự / biểu tượng đang phát
         p.setPen(QColor(255, 255, 255, i == index_ ? 240 : 120));
-        if (i == index_) { QFont sf("Segoe UI Symbol"); sf.setPixelSize(16); p.setFont(sf); p.drawText(QRectF(r.left() + 6, r.top(), 28, r.height()), Qt::AlignCenter, QStringLiteral("♪")); }
-        else { p.setFont(uiFont(13)); p.drawText(QRectF(r.left() + 6, r.top(), 28, r.height()), Qt::AlignCenter, QString::number(i + 1)); }
+        if (i == index_) {
+            QFont sf("Segoe UI Symbol"); sf.setPixelSize(16); p.setFont(sf);
+            p.drawText(QRectF(r.left() + 6, r.top(), 28, r.height()), Qt::AlignCenter, QStringLiteral("♪"));
+        } else {
+            p.setFont(uiFont(13));
+            p.drawText(QRectF(r.left() + 6, r.top(), 28, r.height()), Qt::AlignCenter, QString::number(i + 1));
+        }
 
         const double tw = r.width() - 40 - 56;
         p.setFont(uiFont(15, true));
@@ -1089,8 +1266,11 @@ void PlayerWidget::drawQueue(QPainter& p) {
         p.setPen(QColor(255, 255, 255, 125));
         p.drawText(QRectF(r.left() + 40, r.top() + 30, tw, 18), Qt::AlignLeft | Qt::AlignVCenter,
                    fmArtist.elidedText(t.artist, Qt::ElideRight, int(tw)));
-        if (t.duration > 0)
-            p.drawText(QRectF(r.right() - 54, r.top(), 48, r.height()), Qt::AlignRight | Qt::AlignVCenter, formatTime(t.duration));
+
+        p.setFont(uiFont(12));
+        p.setPen(QColor(255, 255, 255, 110));
+        p.drawText(QRectF(r.right() - 56, r.top(), 52, r.height()), Qt::AlignRight | Qt::AlignVCenter,
+                   t.duration > 0 ? formatTime(t.duration) : QStringLiteral("--:--"));
     }
     p.restore();
 }
@@ -1103,18 +1283,20 @@ void PlayerWidget::drawEq(QPainter& p) {
 
     p.setPen(QColor(255, 255, 255, 240));
     p.setFont(uiFont(20, true));
-    p.drawText(QRectF(in.left(), in.top(), in.width() * 0.6, 34), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Equalizer"));
+    p.drawText(QRectF(in.left(), in.top(), in.width() * 0.6, 34), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("Equalizer"));
 
-    // công tắc bật/tắt
+    // Công tắc bật/tắt
     const QRectF sw = eqToggleRect();
     p.setPen(Qt::NoPen);
     p.setBrush(on ? QColor(52, 199, 89) : QColor(255, 255, 255, 70));
     p.drawRoundedRect(sw, sw.height() / 2, sw.height() / 2);
     p.setBrush(Qt::white);
-    p.drawEllipse(QPointF(on ? sw.right() - sw.height() / 2 : sw.left() + sw.height() / 2, sw.center().y()), sw.height() / 2 - 3, sw.height() / 2 - 3);
+    p.drawEllipse(QPointF(on ? sw.right() - sw.height() / 2 : sw.left() + sw.height() / 2, sw.center().y()),
+                  sw.height() / 2 - 3, sw.height() / 2 - 3);
     p.setBrush(Qt::NoBrush);
 
-    // preset
+    // Presets sẵn
     p.setFont(uiFont(13, true));
     for (int i = 0; i < Equalizer::kPresetCount; ++i) {
         const QRectF r = presetRect(i);
@@ -1132,7 +1314,7 @@ void PlayerWidget::drawEq(QPainter& p) {
     const double dim = on ? 1.0 : 0.45;
     const double zeroY = g.top + g.h / 2;
     p.setPen(QPen(QColor(255, 255, 255, int(40 * dim)), 1, Qt::DashLine));
-    p.drawLine(QPointF(g.left + 6, zeroY), QPointF(g.left + g.colW * Equalizer::kBands - 6, zeroY));    // vạch 0 dB
+    p.drawLine(QPointF(g.left + 6, zeroY), QPointF(g.left + g.colW * Equalizer::kBands - 6, zeroY));
     for (int k = 0; k < Equalizer::kBands; ++k) {
         const double x = g.left + (k + 0.5) * g.colW;
         const float db = eq.gain(k);
@@ -1152,10 +1334,26 @@ void PlayerWidget::drawEq(QPainter& p) {
         p.setPen(QColor(255, 255, 255, 150));
         p.drawText(QRectF(x - g.colW / 2, g.top + g.h + 12, g.colW, 16), Qt::AlignCenter, QString::fromUtf8(kFreqLabels[k]));
     }
+
+    // v1.1: Nút Lưu Preset FEQ và Tải FEQ
+    eqSaveRect_ = QRectF(in.left() + 10, in.bottom() - 32, 120, 28);
+    eqExportRect_ = QRectF(in.left() + 140, in.bottom() - 32, 120, 28);
+    auto pillBtn = [&](const QRectF& r, const QString& title) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(255, 255, 255, 38));
+        p.drawRoundedRect(r, 14, 14);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QColor(255, 255, 255, 220));
+        p.setFont(uiFont(12, true));
+        p.drawText(r, Qt::AlignCenter, title);
+    };
+    pillBtn(eqSaveRect_, QStringLiteral("💾 Lưu FEQ"));
+    pillBtn(eqExportRect_, QStringLiteral("📂 Tải FEQ"));
+
     p.setPen(QColor(255, 255, 255, 105));
-    p.setFont(uiFont(12));
-    p.drawText(QRectF(in.left(), in.bottom() - 22, in.width(), 20), Qt::AlignCenter,
-               QStringLiteral("Kéo để chỉnh · nhấp đúp để đưa về 0 dB"));
+    p.setFont(uiFont(11));
+    p.drawText(QRectF(in.left() + 270, in.bottom() - 30, in.width() - 270, 24), Qt::AlignRight | Qt::AlignVCenter,
+               QStringLiteral("Nhấp đúp thanh: về 0 dB"));
 }
 
 // ------------------------------- Cài đặt -------------------------------
@@ -1166,6 +1364,7 @@ void PlayerWidget::loadSettings() {
     setSpectrum_ = s.value("ui/spectrum", true).toBool();
     setLyricOffsetMs_ = s.value("ui/lyricOffsetMs", 0.0).toDouble();
     volume_ = std::clamp(s.value("audio/volume", 1.0).toDouble(), 0.0, 1.0);
+    sampleRate_ = s.value("audio/sampleRate", 44100).toInt();
     applyVolume();
 }
 
@@ -1175,10 +1374,11 @@ void PlayerWidget::saveSettings() {
     s.setValue("ui/spectrum", setSpectrum_);
     s.setValue("ui/lyricOffsetMs", setLyricOffsetMs_);
     s.setValue("audio/volume", volume_);
+    s.setValue("audio/sampleRate", sampleRate_);
 }
 
 void PlayerWidget::applyVolume() {
-    if (sink_) sink_->setVolume(float(volume_ * volume_));      // đường cong bình phương cho cảm giác âm lượng tự nhiên
+    if (sink_) sink_->setVolume(float(volume_ * volume_));
 }
 
 QRectF PlayerWidget::settingsRow(int i) const {
@@ -1239,11 +1439,11 @@ void PlayerWidget::drawSettings(QPainter& p) {
     };
 
     QRectF r = settingsRow(0);
-    label(r, QStringLiteral("Nền ambient động"), QStringLiteral("Ảnh bìa làm mờ phủ toàn cửa sổ"));
+    label(r, QStringLiteral("Nền ambient động"), QStringLiteral("Ảnh bìa làm mờ phủ toàn cửa sổ (chuẩn iOS)"));
     sw(QRectF(r.right() - 48, r.center().y() - 14, 48, 28), setAmbient_);
 
     r = settingsRow(1);
-    label(r, QStringLiteral("Sóng nhạc quanh ảnh bìa"), QStringLiteral("Hiệu ứng spectrum theo nhịp nhạc"));
+    label(r, QStringLiteral("Sóng nhạc quanh ảnh bìa"), QStringLiteral("Hiệu ứng spectrum 96 dải theo nhịp"));
     sw(QRectF(r.right() - 48, r.center().y() - 14, 48, 28), setSpectrum_);
 
     slider(settingsRow(2), QStringLiteral("Âm lượng"), QString("%1%").arg(int(std::round(volume_ * 100))), volume_);
@@ -1251,13 +1451,31 @@ void PlayerWidget::drawSettings(QPainter& p) {
            QString("%1%2 ms").arg(setLyricOffsetMs_ > 0 ? "+" : "").arg(int(setLyricOffsetMs_)),
            (setLyricOffsetMs_ + 2000.0) / 4000.0);
 
-    // Giới thiệu
+    // v1.1: Tần số lấy mẫu (Sample Rate)
     r = settingsRow(4);
+    label(r, QStringLiteral("Tần số lấy mẫu"), QStringLiteral("Tần số DAC xuất âm thanh (Hz)"));
+    const int rates[3] = { 44100, 48000, 96000 };
+    const QString rateLabels[3] = { QStringLiteral("44.1k"), QStringLiteral("48k"), QStringLiteral("96k") };
+    const double bw = 54.0;
+    for (int i = 0; i < 3; ++i) {
+        srRects_[i] = QRectF(r.right() - 180 + i * (bw + 6), r.center().y() - 14, bw, 28);
+        const bool act = (sampleRate_ == rates[i]);
+        p.setPen(Qt::NoPen);
+        p.setBrush(act ? QColor(52, 199, 89) : QColor(255, 255, 255, 38));
+        p.drawRoundedRect(srRects_[i], 14, 14);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(act ? Qt::white : QColor(255, 255, 255, 200));
+        p.setFont(uiFont(12, true));
+        p.drawText(srRects_[i], Qt::AlignCenter, rateLabels[i]);
+    }
+
+    // Giới thiệu
+    r = settingsRow(5);
     p.setPen(QPen(QColor(255, 255, 255, 30), 1));
     p.drawLine(QPointF(r.left(), r.top() - 6), QPointF(r.right(), r.top() - 6));
     p.setPen(QColor(255, 255, 255, 235));
     p.setFont(uiFont(15, true));
-    p.drawText(QRectF(r.left(), r.top() + 4, r.width(), 22), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("FMusic 0.3.0"));
+    p.drawText(QRectF(r.left(), r.top() + 4, r.width(), 22), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("FMusic 1.1"));
     p.setPen(QColor(255, 255, 255, 125));
     p.setFont(uiFont(12));
     const QString media = media_.available() ? QStringLiteral("Điều khiển media Windows: bật (SMTC)")
@@ -1265,7 +1483,7 @@ void PlayerWidget::drawSettings(QPainter& p) {
                                              : QStringLiteral("Phím media: chưa đăng ký được");
     p.drawText(QRectF(r.left(), r.top() + 28, r.width(), 18), Qt::AlignLeft | Qt::AlignVCenter, media);
     p.drawText(QRectF(r.left(), r.top() + 46, r.width(), 18), Qt::AlignLeft | Qt::AlignVCenter,
-               QStringLiteral("Giải mã bằng FFmpeg · giao diện Qt"));
+               QStringLiteral("Lõi C++ · FFmpeg · Hỗ trợ Streaming & Playlist .fpl & Preset .feq"));
 }
 
 // ------------------------------- Media Windows (SMTC / phím media) -------------------------------
@@ -1275,7 +1493,6 @@ void PlayerWidget::showEvent(QShowEvent* e) {
     if (mediaInit_) return;
     mediaInit_ = true;
 
-    // Các callback của SMTC có thể đến từ thread khác của Windows -> đẩy về UI thread
     MediaCallbacks cb;
     cb.play = [this] {
         QMetaObject::invokeMethod(this, [this] { if (!playlist_.isEmpty() && !player_.playing()) togglePlay(); }, Qt::QueuedConnection);
@@ -1290,7 +1507,7 @@ void PlayerWidget::showEvent(QShowEvent* e) {
         QMetaObject::invokeMethod(this, [this] { prev(); }, Qt::QueuedConnection);
     };
     media_.init(reinterpret_cast<void*>(winId()), cb);
-    if (!media_.available()) registerHotkeys();               // dự phòng: phím media toàn cục
+    if (!media_.available()) registerHotkeys();
     lastMediaKey_.clear();
     lastMediaState_ = -1;
     updateMedia();

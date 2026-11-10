@@ -55,8 +55,11 @@ bool AudioDecoder::probe(const std::string& path, TrackInfo& out) {
     return ok;
 }
 
-AudioDecoder::AudioDecoder() {
-    pkt_ = av_packet_alloc();
+// Khởi tạo decoder với sample rate đầu ra tuỳ chỉnh (mặc định 44100).
+AudioDecoder::AudioDecoder(int outRate)
+    : outRate_(outRate > 0 ? outRate : kOutRate) {
+    avformat_network_init();
+    pkt_   = av_packet_alloc();
     frame_ = av_frame_alloc();
 }
 
@@ -114,9 +117,10 @@ bool AudioDecoder::open(const std::string& path, std::string* err) {
     if (codec_->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC)
         av_channel_layout_default(&codec_->ch_layout, codec_->ch_layout.nb_channels > 0 ? codec_->ch_layout.nb_channels : 2);
 
+    // Dùng outRate_ thay vì hằng số kOutRate để hỗ trợ sample rate động (v1.1)
     AVChannelLayout outLayout;
     av_channel_layout_default(&outLayout, kOutChannels);
-    r = swr_alloc_set_opts2(&swr_, &outLayout, AV_SAMPLE_FMT_FLT, kOutRate,
+    r = swr_alloc_set_opts2(&swr_, &outLayout, AV_SAMPLE_FMT_FLT, outRate_,
                             &codec_->ch_layout, codec_->sample_fmt, codec_->sample_rate, 0, nullptr);
     av_channel_layout_uninit(&outLayout);
     if (r < 0) return fail("swr_alloc_set_opts2", r);

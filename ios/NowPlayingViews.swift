@@ -4,30 +4,54 @@ import UniformTypeIdentifiers
 // (ContentView nằm trong Chrome.swift)
 
 // MARK: - Ambient background
+// TASK 4: Smooth cross-fade between album arts without killing the rotation animation.
+// Instead of using .id(token) which destroys/recreates the view (causing flash),
+// we keep two overlapping image layers and cross-fade between them while the
+// continuous rotation animation stays alive on a shared @State var angle.
 struct AmbientBackground: View {
     let image: UIImage?     // đã blur sẵn bằng Core Image (xem Backdrop.make)
     let token: Int
-    @State private var animate = false
+    @State private var angle: Double = 0
+    @State private var prevImage: UIImage?
+    @State private var showNew = false
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 Color.black
-                if let image {
-                    ZStack {
-                        layer(image, geo, rotation: animate ? 14 : -14, scale: animate ? 2.0 : 1.6, opacity: 1)
-                        layer(image, geo, rotation: animate ? -40 : 30, scale: animate ? 1.7 : 2.2, opacity: 0.55)
-                    }
-                    .id(token)
-                    .transition(.opacity)
+                // Ảnh cũ mờ dần
+                if let img = prevImage {
+                    animatedLayers(img, geo).opacity(showNew ? 0 : 1)
+                }
+                // Ảnh mới hiện dần
+                if let img = image {
+                    animatedLayers(img, geo).opacity(showNew ? 1 : 0)
                 }
                 Color.black.opacity(0.38)
             }
-            .animation(.easeInOut(duration: 0.9), value: token)
+            .animation(.easeInOut(duration: 0.9), value: showNew)
         }
         .ignoresSafeArea()
-        .onAppear {
-            withAnimation(.easeInOut(duration: 20).repeatForever(autoreverses: true)) { animate = true }
+        .onAppear { startRotation() }
+        .onChange(of: token) { _ in
+            prevImage = image
+            showNew = false
+            withAnimation(.easeInOut(duration: 0.9)) { showNew = true }
+            // Dọn ảnh cũ sau khi animation kết thúc
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { prevImage = nil }
+        }
+    }
+
+    /// Bắt đầu vòng xoay liên tục không ngắt quãng.
+    private func startRotation() {
+        withAnimation(.linear(duration: 60).repeatForever(autoreverses: false)) { angle = 360 }
+    }
+
+    /// Hai lớp ảnh xoay ngược chiều nhau để tạo hiệu ứng chuyển động sống động.
+    private func animatedLayers(_ img: UIImage, _ geo: GeometryProxy) -> some View {
+        ZStack {
+            layer(img, geo, rotation: angle * 0.4,  scale: 1.8, opacity: 1.0)
+            layer(img, geo, rotation: -angle * 0.25, scale: 2.1, opacity: 0.55)
         }
     }
 

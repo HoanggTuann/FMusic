@@ -1,6 +1,8 @@
 #include "Equalizer.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <string>
 
 static constexpr double kPi = 3.14159265358979323846;
 
@@ -42,6 +44,115 @@ void Equalizer::applyPreset(int idx) {
     const float* g = presetGains(idx);
     for (int i = 0; i < kBands; ++i) gains_[i].store(g[i]);
     version_.fetch_add(1);
+}
+
+// v1.1: cập nhật sample rate và tính lại hệ số biquad ngay lập tức
+void Equalizer::setSampleRate(int sr) {
+    if (sr <= 0) return;
+    sr_ = sr;
+    updateCoeffs();
+    // Đánh dấu version để process() không tính lại thừa
+    applied_ = version_.load();
+}
+
+// v1.1: lưu preset tùy chỉnh ra tệp JSON
+bool Equalizer::savePreset(const std::string& path, const std::string& name) const {
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) return false;
+
+    std::fprintf(f, "{\n");
+    std::fprintf(f, "  \"version\": 1,\n");
+    std::fprintf(f, "  \"name\": \"%s\",\n", name.c_str());
+    std::fprintf(f, "  \"enabled\": %s,\n", enabled_.load() ? "true" : "false");
+    std::fprintf(f, "  \"gains\": [");
+    for (int i = 0; i < kBands; ++i) {
+        std::fprintf(f, "%.4f", gains_[i].load());
+        if (i < kBands - 1) std::fprintf(f, ", ");
+    }
+    std::fprintf(f, "]\n");
+    std::fprintf(f, "}\n");
+
+    std::fclose(f);
+    return true;
+}
+
+// v1.1: đọc preset từ tệp JSON (parser thủ công, không phụ thuộc lib ngoài)
+bool Equalizer::loadPreset(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return false;
+
+    // Đọc toàn bộ nội dung vào chuỗi
+    std::string content;
+    {
+        char buf[256];
+        while (std::fgets(buf, sizeof buf, f)) content += buf;
+    }
+    std::fclose(f);
+
+    // --- Parser JSON đơn giản: trích xuất từng trường theo tên key ---
+    auto findValue = [&](const std::string& key) -> std::string {
+        const std::string search = "\"" + key + "\"";
+        auto pos = content.find(search);
+        if (pos == std::string::npos) return {};
+        pos = content.find(':', pos + search.size());
+        if (pos == std::string::npos) return {};
+        ++pos;
+        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t')) ++pos;
+        size_t end = pos;
+        while (end < content.size() && content[end] != ',' && content[end] != '\n' && content[end] != '}') ++end;
+        std::string val = content.substr(pos, end - pos);
+        // Xóa dấu ngoặc kép nếu có
+        if (!val.empty() && val.front() == '"') {
+            val.erase(0, 1);
+            auto q = val.find('"');
+            if (q != std::string::npos) val.erase(q);
+        }
+        // Xóa khoảng trắng cuối
+        while (!val.empty() && (val.back() == ' ' || val.back() == '\r')) val.pop_back();
+        return val;
+    };
+
+    // name
+    customPresetName_ = findValue("name");
+
+    // enabled
+    {
+        std::string en = findValue("enabled");
+        if (en == "true")  enabled_ = true;
+        if (en == "false") enabled_ = false;
+    }
+
+    // gains: tìm mảng [...] sau key "gains"
+    {
+        auto pos = content.find("\"gains\"");
+        if (pos != std::string::npos) {
+            pos = content.find('[', pos);
+            if (pos != std::string::npos) {
+                auto endArr = content.find(']', pos);
+                if (endArr != std::string::npos) {
+                    std::string arr = content.substr(pos + 1, endArr - pos - 1);
+                    // Phân tách theo dấu phẩy
+                    int band = 0;
+                    size_t cur = 0;
+                    while (band < kBands && cur < arr.size()) {
+                        while (cur < arr.size() && (arr[cur] == ' ' || arr[cur] == '\t' || arr[cur] == '\n' || arr[cur] == '\r')) ++cur;
+                        if (cur >= arr.size()) break;
+                        size_t next = arr.find(',', cur);
+                        std::string token = (next == std::string::npos) ? arr.substr(cur) : arr.substr(cur, next - cur);
+                        try {
+                            float db = std::stof(token);
+                            gains_[band].store(std::clamp(db, -12.f, 12.f));
+                        } catch (...) {}
+                        ++band;
+                        cur = (next == std::string::npos) ? arr.size() : next + 1;
+                    }
+                }
+            }
+        }
+    }
+
+    version_.fetch_add(1);   // báo cho process() tính lại hệ số
+    return true;
 }
 
 void Equalizer::updateCoeffs() {

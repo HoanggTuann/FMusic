@@ -15,6 +15,14 @@ SpectrumAnalyzer::SpectrumAnalyzer(int fftSize, int bands, int sampleRate)
         edges_[i] = fmin * std::pow(fmax / fmin, double(i) / bands_);
 }
 
+void SpectrumAnalyzer::setSampleRate(int sr) {
+    std::lock_guard<std::mutex> lk(m_);
+    sr_ = sr;
+    const double fmin = 40.0, fmax = std::min(16000.0, sr_ * 0.5 * 0.95);
+    for (int i = 0; i <= bands_; ++i)
+        edges_[i] = fmin * std::pow(fmax / fmin, double(i) / bands_);
+}
+
 void SpectrumAnalyzer::push(const float* s, size_t frames) {
     std::lock_guard<std::mutex> lk(m_);
     const size_t N = size_t(n_);

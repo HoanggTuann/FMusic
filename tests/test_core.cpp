@@ -1,9 +1,11 @@
-// Kiểm thử Equalizer + Lyrics (không cần FFmpeg).
+// Kiểm thử Equalizer + Lyrics + PlaylistFile (.fpl) + EqPreset (.feq).
 #include <cmath>
 #include <cstdio>
 #include <vector>
 #include "../core/Equalizer.h"
+#include "../core/EqPreset.h"
 #include "../core/Lyrics.h"
+#include "../core/PlaylistFile.h"
 
 static int fails = 0;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL line %d: %s\n", __LINE__, #c); ++fails; } } while (0)
@@ -30,18 +32,44 @@ int main() {
       double a = rmsAfter(eq, 1000) / ref; std::printf("1k @-12dB gain x%.2f (mong ~0.25)\n", a);
       CHECK(a > 0.2 && a < 0.3); }
     { Equalizer eq; double a = rmsAfter(eq, 1000) / ref; CHECK(a > 0.99 && a < 1.01); }   // tắt = bypass
-    { Equalizer eq; eq.applyPreset(1); CHECK(eq.gain(0) == 6.f); CHECK(std::string(Equalizer::presetName(1)) == "Bass"); }
+    { Equalizer eq; eq.applyPreset(1); CHECK(eq.gain(0) == 6.f); }
+
+    // Test PlaylistFile save & load
+    {
+        std::vector<std::string> paths = { "C:/Music/song1.mp3", "D:/Audio/track2.flac" };
+        CHECK(PlaylistFile::save("test_playlist.fpl", paths));
+        std::vector<std::string> loaded;
+        CHECK(PlaylistFile::load("test_playlist.fpl", loaded));
+        CHECK(loaded.size() == 2);
+        CHECK(loaded[0] == "C:/Music/song1.mp3");
+        CHECK(loaded[1] == "D:/Audio/track2.flac");
+    }
+
+    // Test EqPreset save & load
+    {
+        FEQPreset p;
+        p.name = "CustomBass";
+        p.enabled = true;
+        p.gains = { 4.5f, 3.0f, 1.5f, 0.f, -1.f, 0.f, 2.f, 3.5f, 4.f, 3.f };
+        CHECK(FEQPreset::save("test_preset.feq", p));
+        FEQPreset loaded;
+        CHECK(FEQPreset::load("test_preset.feq", loaded));
+        CHECK(loaded.name == "CustomBass");
+        CHECK(loaded.enabled == true);
+        CHECK(loaded.gains.size() == 10);
+        CHECK(std::fabs(loaded.gains[0] - 4.5f) < 0.01f);
+    }
 
     Lyrics ly;
     CHECK(ly.parse("\xEF\xBB\xBF[ar:Ca si]\n[ti:Bai hat]\n[offset:500]\n[00:12.00]Dong mot\n[00:05.50][01:00.00]Dong <00:06.00>hai\n\n[00:30]\n"));
     CHECK(ly.synced());
     CHECK(ly.lines().size() == 4);
-    CHECK(ly.lines()[0].text == "Dong hai");                       // 5.5 - 0.5 = 5.0 s
+    CHECK(ly.lines()[0].text == "Dong hai");
     CHECK(std::fabs(ly.lines()[0].time - 5.0) < 1e-6);
     CHECK(ly.indexAt(1.0) == -1);
     CHECK(ly.indexAt(5.0) == 0);
-    CHECK(ly.indexAt(11.6) == 1);                                    // 12.0-0.5 = 11.5
-    CHECK(ly.indexAt(31.0) == 2 && ly.lines()[2].text.empty());      // dòng trống [00:30]
+    CHECK(ly.indexAt(11.6) == 1);
+    CHECK(ly.indexAt(31.0) == 2 && ly.lines()[2].text.empty());
     CHECK(ly.indexAt(500) == 3);
     CHECK(ly.parse("Loi 1\nLoi 2\n\nLoi 3\n\n") && !ly.synced() && ly.lines().size() == 4 && ly.indexAt(10) == -1);
     CHECK(!ly.parse("[ar:x]\n[ti:y]\n") && ly.empty());

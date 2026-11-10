@@ -9,10 +9,11 @@
 #include "RingBuffer.h"
 #include "SpectrumAnalyzer.h"
 
-// Lõi phát nhạc dùng chung cho Windows & iOS.
+// Lõi phát nhạc dùng chung cho Windows & iOS & Android.
 //   decode thread:  AudioDecoder -> RingBuffer
 //   audio callback: pull() lấy PCM từ RingBuffer, đồng thời đẩy vào SpectrumAnalyzer
 //   UI thread:      spectrum(), position(), ...
+// v1.1: thêm setSampleRate() để hỗ trợ sample rate động (44.1k, 48k, 96k...).
 class Player {
 public:
     static constexpr int kSampleRate = AudioDecoder::kOutRate;
@@ -27,6 +28,10 @@ public:
     void   play();
     void   pause();
     void   seek(double seconds);
+
+    // v1.1: thay đổi sample rate đầu ra (dừng audio -> khởi lại decoder -> phát lại)
+    void   setSampleRate(int sr);
+    int    sampleRate() const { return sampleRate_; }
 
     bool   playing() const { return playing_; }
     bool   ended() const   { return ended_; }
@@ -57,4 +62,6 @@ private:
     std::atomic<uint64_t> played_{0};
     TrackInfo info_;
     std::vector<uint8_t> cover_;
+    std::string currentPath_;
+    int sampleRate_ = 44100;   // v1.1: sample rate hiện tại (mặc định 44100)
 };

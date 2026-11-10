@@ -14,13 +14,14 @@ struct TrackInfo {
     int coverCodecId = 0;       // AVCodecID của ảnh bìa (mjpeg/png/...), 0 nếu không có
 };
 
-// Mở + demux + decode 1 file âm thanh bất kỳ FFmpeg hỗ trợ, xuất PCM float32 interleaved stereo 44.1 kHz.
+// Mở + demux + decode 1 file âm thanh bất kỳ FFmpeg hỗ trợ, xuất PCM float32 interleaved stereo.
+// Output sample rate có thể cấu hình (mặc định 44100 Hz cho tương thích ngược).
 class AudioDecoder {
 public:
-    static constexpr int kOutRate = 44100;
+    static constexpr int kOutRate = 44100;   // giữ lại để tương thích; dùng outRate_ khi thực thi
     static constexpr int kOutChannels = 2;
 
-    AudioDecoder();
+    explicit AudioDecoder(int outRate = 44100);
     ~AudioDecoder();
     AudioDecoder(const AudioDecoder&) = delete;
     AudioDecoder& operator=(const AudioDecoder&) = delete;
@@ -37,9 +38,14 @@ public:
     const TrackInfo& info() const { return info_; }
     const std::vector<uint8_t>& coverArt() const { return cover_; }   // bytes ảnh gốc (JPEG/PNG...)
 
+    // Trả về sample rate đầu ra thực tế đang dùng
+    int outRate() const { return outRate_; }
+
 private:
     bool convert(const AVFrame* f, std::vector<float>& out);
     void flushResampler(std::vector<float>& out);
+
+    int  outRate_;               // sample rate đầu ra cấu hình được (mặc định 44100)
 
     AVFormatContext* fmt_   = nullptr;
     AVCodecContext*  codec_ = nullptr;

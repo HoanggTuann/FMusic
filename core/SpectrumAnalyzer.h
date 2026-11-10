@@ -5,6 +5,7 @@
 
 // Nhận PCM stereo float, giữ cửa sổ mono gần nhất, tính phổ theo dải log (40 Hz – 16 kHz)
 // và trả về giá trị 0..1 đã làm mượt (attack nhanh / release chậm) cho UI.
+// v1.1: hỗ trợ setSampleRate() khi đổi tần số lấy mẫu runtime.
 class SpectrumAnalyzer {
 public:
     SpectrumAnalyzer(int fftSize = 4096, int bands = 64, int sampleRate = 44100);
@@ -12,6 +13,8 @@ public:
     void  reset();                                    // xoá cửa sổ mẫu (không xoá smoothing)
     float compute(float* out);                        // gọi từ UI thread, ~60 Hz. Trả về mức bass 0..1
     int   bands() const { return bands_; }
+    void  setSampleRate(int sr);
+
 private:
     int n_, bands_, sr_;
     FFT fft_;

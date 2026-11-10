@@ -2,9 +2,11 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 // EQ đồ hoạ 10 băng tần (31 Hz … 16 kHz), mỗi băng là 1 bộ lọc peaking biquad (RBJ), Q ≈ 1.41 (1 octave).
 // setGain()/setEnabled() gọi từ UI thread; process() gọi từ audio thread (lock-free).
+// v1.1: thêm setSampleRate() để hỗ trợ sample rate động, và savePreset()/loadPreset() cho preset tùy chỉnh.
 class Equalizer {
 public:
     static constexpr int kBands = 10;
@@ -21,6 +23,16 @@ public:
     void  setGain(int band, float db);                  // -12 … +12 dB
     float gain(int band) const;
     void  applyPreset(int idx);
+
+    // v1.1: cập nhật sample rate và tính lại hệ số biquad
+    void  setSampleRate(int sr);
+
+    // v1.1: lưu / đọc preset tùy chỉnh dạng JSON
+    bool savePreset(const std::string& path, const std::string& name) const;
+    bool loadPreset(const std::string& path);
+
+    // Tên của preset đã tải gần nhất (rỗng nếu chưa tải preset nào)
+    const std::string& presetName() const { return customPresetName_; }
 
     // Xử lý tại chỗ PCM stereo interleaved float.
     void  process(float* stereo, size_t frames);
@@ -40,4 +52,5 @@ private:
     uint32_t applied_ = 0;
     Biquad bq_[kBands];
     float preamp_ = 1.f;
+    std::string customPresetName_;   // v1.1: tên preset tùy chỉnh đã tải
 };

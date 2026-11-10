@@ -1,6 +1,7 @@
 #pragma once
 #include <QAudioSink>
 #include <QElapsedTimer>
+#include <QFuture>
 #include <QIODevice>
 #include <QPixmap>
 #include <QRectF>
@@ -52,6 +53,7 @@ protected:
 private:
     struct Track { QString path, title, artist; double duration = 0.0; bool probed = false; };
     struct EqGeom { double left, top, h, colW; };
+    // TASK 3: Nav order — 0=NowPlaying, 1=Lyrics, 2=Queue, 3=EQ, 4=Settings
     enum class Panel { None, Lyrics, Queue, Eq, Settings };
 
     // --- phát nhạc / danh sách ---
@@ -62,11 +64,17 @@ private:
     void prev();
     void togglePlay();
     void openDialog(bool append);
+    void openUrlDialog();
+    void initAudioSink();
     void removeTrack(int i);
     void clearPlaylist();
     void addTracks(const QStringList& files);
     void onTick();
     void updateDrag(double x);
+
+    // TASK 4: Playlist save/load — .fpl format
+    void savePlaylist();
+    void loadPlaylist(const QString& path);
 
     // --- panel ---
     void togglePanel(Panel p);
@@ -80,7 +88,7 @@ private:
     QRectF eqToggleRect() const;
     EqGeom eqGeom() const;
     void   setEqFromY(int band, double y);
-    void   loadEq();
+    void   loadEq();;
     void   saveEq();
     void   layoutLyrics(double width);
     void   loadSettings();
@@ -91,6 +99,10 @@ private:
     void   updateMedia();
     void   registerHotkeys();
     void   unregisterHotkeys();
+
+    // TASK 5: EQ preset save/load
+    void saveEqPreset();
+    void loadEqPreset(const QString& path);
 
     // --- vẽ ---
     void computeLayout();
@@ -125,12 +137,21 @@ private:
     int index_ = -1, probeCursor_ = 0;
     bool shuffle_ = false;
     int repeat_ = 0;                   // 0 tắt, 1 lặp danh sách, 2 lặp 1 bài
+
+    // TASK 4: đường dẫn playlist gần nhất
+    QString lastPlaylistPath_;
+
     QString title_, artist_;
 
     // hình ảnh
     QPixmap cover_, bg_, bgPrev_, shadowPix_;
     int shadowArt_ = 0, shadowPad_ = 0;
     float bgFade_ = 1.f, bassSmooth_ = 0.f, artScale_ = 0.86f, progThick_ = 5.f;
+
+    // TASK 1: góc xoay nền ambient + ảnh nền đang chờ từ thread nền
+    float bgAngle_ = 0.f;
+    QFuture<QImage> bgPending_;
+    bool bgPendingActive_ = false;
 
     // tương tác
     bool dragging_ = false, hoverProg_ = false;
@@ -154,6 +175,19 @@ private:
     bool setAmbient_ = true, setSpectrum_ = true;
     double setLyricOffsetMs_ = 0.0, volume_ = 1.0;
     int setDrag_ = -1;
+
+    // TASK 6: Tần số lấy mẫu
+    int sampleRate_ = 44100;
+
     QRectF artRect_, progRect_, prevRect_, playRect_, nextRect_, openRect_, shufRect_, repRect_, panelRect_;
     QRectF navRects_[5];
+
+    // TASK 5: EQ preset user-defined
+    QVector<QString> userPresetNames_;
+    QVector<QString> userPresetPaths_;
+    QRectF eqSaveRect_;
+    QRectF eqExportRect_;
+
+    // TASK 6: vị trí các nút sample rate
+    QRectF srRects_[3];     // 44100 | 48000 | 96000
 };

@@ -21,14 +21,15 @@ extension View {
 }
 
 // MARK: - Các mục của thanh dưới
+// v1.1: Thứ tự mới: Đang phát -> Lời -> Danh sách -> EQ -> Cài đặt
 enum AppTab: Int, CaseIterable {
-    case nowPlaying, queue, lyrics, eq, settings
+    case nowPlaying, lyrics, queue, eq, settings
 
     var title: String {
         switch self {
         case .nowPlaying: return "Đang phát"
-        case .queue:      return "Danh sách"
         case .lyrics:     return "Lời"
+        case .queue:      return "Danh sách"
         case .eq:         return "EQ"
         case .settings:   return "Cài đặt"
         }
@@ -36,8 +37,8 @@ enum AppTab: Int, CaseIterable {
     var symbol: String {
         switch self {
         case .nowPlaying: return "music.note"
-        case .queue:      return "list.bullet"
         case .lyrics:     return "quote.bubble"
+        case .queue:      return "list.bullet"
         case .eq:         return "slider.horizontal.3"
         case .settings:   return "gearshape"
         }
@@ -120,7 +121,9 @@ struct ContentView: View {
     @AppStorage("ambientBackground") private var ambient = true
     @AppStorage("spectrumRing") private var spectrumRing = true
 
-    private var importTypes: [UTType] { [.audio, UTType(filenameExtension: "lrc") ?? .plainText] }
+    private var importTypes: [UTType] {
+        [.audio, UTType(filenameExtension: "lrc") ?? .plainText, UTType(filenameExtension: "feq") ?? .json]
+    }
 
     var body: some View {
         ZStack {
@@ -129,8 +132,8 @@ struct ContentView: View {
             Group {
                 switch tab {
                 case .nowPlaying: nowPlaying
-                case .queue:      QueueView(vm: vm) { importAppend = true; showImporter = true }
                 case .lyrics:     LyricsView(vm: vm)
+                case .queue:      QueueView(vm: vm) { importAppend = true; showImporter = true }
                 case .eq:         EQView(vm: vm)
                 case .settings:   SettingsView(vm: vm)
                 }
@@ -153,21 +156,21 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear { vm.scanDocuments() }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: importTypes, allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { importAppend ? vm.addFiles(urls) : vm.openFiles(urls) }
+            if case .success(let urls) = result {
+                // Kiểm tra nếu là file .feq thì import preset
+                if let feq = urls.first(where: { $0.pathExtension.lowercased() == "feq" }) {
+                    vm.importPreset(from: feq)
+                } else {
+                    importAppend ? vm.addFiles(urls) : vm.openFiles(urls)
+                }
+            }
         }
     }
 
+    // v1.1: Đã bỏ nút "+" trên đầu ứng dụng
     private var nowPlaying: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button { importAppend = false; showImporter = true } label: {
-                    Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).frame(width: 40, height: 40)
-                }
-                .buttonStyle(.plain)
-                .glassBackground(in: Circle(), interactive: true)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
+            Spacer().frame(height: 16)
 
             ArtworkStage(cover: vm.cover, isPlaying: vm.isPlaying, showSpectrum: spectrumRing, spectrum: vm.spectrum)
                 .padding(.horizontal, 12)
@@ -228,6 +231,19 @@ struct SettingsView: View {
                     Toggle("Sóng nhạc quanh ảnh bìa", isOn: $spectrumRing)
                 }
 
+                // v1.1: Tùy chỉnh tần số lấy mẫu (Sample Rate)
+                card {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Tần số lấy mẫu (DAC output)").font(.subheadline.weight(.semibold))
+                        Picker("Tần số lấy mẫu", selection: Binding(get: { vm.sampleRate }, set: { vm.setSampleRate($0) })) {
+                            Text("44,100 Hz").tag(44100)
+                            Text("48,000 Hz").tag(48000)
+                            Text("96,000 Hz").tag(96000)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+
                 card {
                     HStack {
                         Text("Lệch thời gian lời")
@@ -245,8 +261,8 @@ struct SettingsView: View {
                 }
 
                 card {
-                    Text("FMusic 0.3.0").font(.system(size: 16, weight: .semibold))
-                    Text("Giải mã bằng FFmpeg. Điều khiển từ màn hình khoá, Control Center và tai nghe đã được bật. Tệp nhạc được sao chép vào Tệp ▸ Trên iPhone ▸ FMusic; bạn cũng có thể tự chép nhạc và tệp .lrc vào đó.")
+                    Text("FMusic 1.1").font(.system(size: 16, weight: .semibold))
+                    Text("Giải mã bằng FFmpeg. Chạy ngầm khi khoá màn hình hoặc tắt màn hình đã được cấu hình tối ưu. Hỗ trợ tệp .lrc, danh sách phát .fpl và preset .feq.")
                         .font(.footnote).opacity(0.6)
                 }
             }

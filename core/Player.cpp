@@ -4,16 +4,17 @@
 #include <cstring>
 
 Player::Player()
-    : ring_(size_t(kSampleRate) * 2 * 2),          // ~2 giây PCM
-      eq_(kSampleRate),
-      analyzer_(4096, kBands, kSampleRate) {}
+    : ring_(size_t(96000) * 2 * 2),          // đủ chứa ~2 giây PCM ở 96 kHz hoặc ~4 giây ở 44.1 kHz
+      eq_(sampleRate_),
+      analyzer_(4096, kBands, sampleRate_) {}
 
 Player::~Player() { stopThread(); }
 
 bool Player::load(const std::string& path, std::string* err) {
     stopThread();
     playing_ = false;
-    auto dec = std::make_unique<AudioDecoder>();
+    currentPath_ = path;
+    auto dec = std::make_unique<AudioDecoder>(sampleRate_);
     if (!dec->open(path, err)) {
         dec_.reset();
         info_ = TrackInfo();
@@ -28,6 +29,20 @@ bool Player::load(const std::string& path, std::string* err) {
     eof_ = false; ended_ = false; seekReq_ = -1.0; base_ = 0.0; played_ = 0;
     startThread();
     return true;
+}
+
+void Player::setSampleRate(int sr) {
+    if (sr <= 0 || sr == sampleRate_) return;
+    const bool wasPlaying = playing_;
+    const double curPos = position();
+    sampleRate_ = sr;
+    eq_.setSampleRate(sr);
+    analyzer_.setSampleRate(sr);
+    if (!currentPath_.empty()) {
+        load(currentPath_);
+        seek(curPos);
+        if (wasPlaying) play();
+    }
 }
 
 void Player::startThread() {
@@ -52,7 +67,7 @@ void Player::seek(double s) {
 }
 
 double Player::position() const {
-    double p = base_.load() + double(played_.load()) / kSampleRate;
+    double p = base_.load() + double(played_.load()) / double(sampleRate_);
     if (info_.duration > 0) p = std::min(p, info_.duration);
     return p;
 }

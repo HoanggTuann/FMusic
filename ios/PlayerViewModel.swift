@@ -58,7 +58,8 @@ final class PlayerViewModel: NSObject, ObservableObject {
     let spectrum = SpectrumModel()
 
     @Published var title = "Chưa có bài hát"
-    @Published var artist = "Nhấn + để chọn nhạc"
+    // TASK 1 & 5: Cập nhật văn bản placeholder
+    @Published var artist = "Mở Danh sách phát để thêm nhạc"
     @Published var cover: UIImage?
     @Published var backdrop: UIImage?
     @Published var coverToken = 0
@@ -82,6 +83,12 @@ final class PlayerViewModel: NSObject, ObservableObject {
     @Published var eqGains = [Float](repeating: 0, count: 10)
     @Published var eqPreset = 0          // -1 = tuỳ chỉnh
 
+    // TASK 3: User preset management
+    @Published var userPresets: [(name: String, gains: [Float])] = []
+
+    // TASK 2: Dynamic sample rate
+    @Published var sampleRate: Int = 44100
+
     private let core = MusicPlayerCore()
     private let engine = AVAudioEngine()
     private var sourceNode: AVAudioSourceNode!
@@ -92,7 +99,12 @@ final class PlayerViewModel: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        // TASK 2: load persisted sample rate
+        let storedSR = UserDefaults.standard.integer(forKey: "sampleRate")
+        if storedSR > 0 { sampleRate = storedSR }
         loadEq()
+        // TASK 3: load user presets on startup
+        loadUserPresets()
         configureAudio()
         configureRemoteCommands()
         link = CADisplayLink(target: self, selector: #selector(tick))
@@ -103,15 +115,26 @@ final class PlayerViewModel: NSObject, ObservableObject {
         link?.invalidate()
         engine.stop()
         scopedURL?.stopAccessingSecurityScopedResource()
+        NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: Audio engine
+    // TASK 1: Background playback + interruption/route-change handling
+    // TASK 2: Uses dynamic sampleRate instead of hardcoded 44100
     private func configureAudio() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default)
-        try? session.setActive(true)
+        try? session.setCategory(.playback, mode: .default, options: [.allowBluetooth, .allowAirPlay])
+        try? session.setActive(true, options: .notifyOthersOnDeactivation)
 
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!   // float32 planar
+        // Handle interruptions (phone calls, Siri, etc.)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleInterruption),
+            name: AVAudioSession.interruptionNotification, object: session)
+        // Handle route changes (headphones unplugged, etc.)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange),
+            name: AVAudioSession.routeChangeNotification, object: session)
+
+        // TASK 2: Use dynamic sample rate
+        let format = AVAudioFormat(standardFormatWithSampleRate: Double(sampleRate), channels: 2)!   // float32 planar
         let core = self.core
         sourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, abl -> OSStatus in
             let list = UnsafeMutableAudioBufferListPointer(abl)
@@ -124,6 +147,39 @@ final class PlayerViewModel: NSObject, ObservableObject {
         engine.attach(sourceNode)
         engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
         try? engine.start()
+    }
+
+    // TASK 1: Xử lý ngắt (gọi điện, Siri, v.v.)
+    @objc private func handleInterruption(_ n: Notification) {
+        guard let info = n.userInfo,
+              let typeVal = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeVal) else { return }
+        if type == .began {
+            pause()
+        } else if type == .ended {
+            if let opts = info[AVAudioSessionInterruptionOptionKey] as? UInt,
+               AVAudioSession.InterruptionOptions(rawValue: opts).contains(.shouldResume) {
+                play()
+            }
+        }
+    }
+
+    // TASK 1: Dừng khi rút tai nghe
+    @objc private func handleRouteChange(_ n: Notification) {
+        if let reason = n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+           reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue {
+            pause()
+        }
+    }
+
+    // TASK 2: Set sample rate dynamically, reinitialise engine
+    func setSampleRate(_ sr: Int) {
+        sampleRate = sr
+        engine.stop()
+        // Detach old sourceNode before reconfiguring
+        if let node = sourceNode { engine.detach(node) }
+        configureAudio() // reinit with new SR
+        UserDefaults.standard.set(sr, forKey: "sampleRate")
     }
 
     // MARK: Danh sách phát
@@ -254,7 +310,8 @@ final class PlayerViewModel: NSObject, ObservableObject {
         tracks.removeAll()
         currentIndex = -1
         lyrics = []; lyricsSynced = false; currentLyric = -1
-        title = "Chưa có bài hát"; artist = "Nhấn + để chọn nhạc"
+        // TASK 1 & 5: Updated placeholder text
+        title = "Chưa có bài hát"; artist = "Mở Danh sách phát để thêm nhạc"
         duration = 0; position = 0
         cover = nil; backdrop = nil; coverToken += 1
     }
@@ -291,6 +348,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
         loadLyrics(for: url, embedded: info.lyrics)
 
         if autoplay { core.play(); isPlaying = true } else { isPlaying = false }
+        // TASK 1: Cập nhật Now Playing ngay sau khi tải bài
         updateNowPlaying()
     }
 
@@ -358,6 +416,86 @@ final class PlayerViewModel: NSObject, ObservableObject {
         d.set(eqPreset, forKey: "eq.preset")
     }
 
+    // MARK: TASK 3 - EQ preset save/load/export/import
+
+    /// Lưu preset hiện tại với tên tuỳ chỉnh vào thư mục EQPresets trong Documents.
+    func saveCurrentAsPreset(name: String) {
+        let preset: [String: Any] = [
+            "version": 1,
+            "name": name,
+            "enabled": eqEnabled,
+            "gains": eqGains.map { Double($0) }
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: preset, options: .prettyPrinted),
+           let dir = eqPresetsDir() {
+            let url = dir.appendingPathComponent("\(name).feq")
+            try? data.write(to: url)
+            loadUserPresets()
+        }
+    }
+
+    /// Xuất preset hiện tại ra file .feq tạm thời để share sheet có thể gửi đi.
+    func exportPreset(name: String) -> URL? {
+        let preset: [String: Any] = [
+            "version": 1,
+            "name": name,
+            "gains": eqGains.map { Double($0) }
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: preset, options: .prettyPrinted) else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).feq")
+        try? data.write(to: url)
+        return url
+    }
+
+    /// Nhập preset .feq từ URL (file importer hoặc AirDrop, v.v.).
+    func importPreset(from url: URL) {
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let gains = json["gains"] as? [Double], gains.count == 10 else { return }
+        eqGains = gains.map { Float($0) }
+        for (i, g) in eqGains.enumerated() { core.setEqGain(g, forBand: i) }
+        eqPreset = -1
+        setEqEnabled(true)
+    }
+
+    /// Trả về URL thư mục chứa các preset người dùng; tạo thư mục nếu chưa có.
+    private func eqPresetsDir() -> URL? {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        let dir = docs.appendingPathComponent("EQPresets")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Nạp danh sách preset người dùng từ đĩa.
+    func loadUserPresets() {
+        guard let dir = eqPresetsDir(),
+              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return }
+        userPresets = files.filter { $0.pathExtension == "feq" }.compactMap { url in
+            guard let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let gains = json["gains"] as? [Double], gains.count == 10,
+                  let name = json["name"] as? String else { return nil }
+            return (name: name, gains: gains.map { Float($0) })
+        }.sorted { $0.name < $1.name }
+    }
+
+    /// Áp dụng user preset theo tên.
+    func applyUserPreset(_ preset: (name: String, gains: [Float])) {
+        eqGains = preset.gains
+        for (i, g) in eqGains.enumerated() { core.setEqGain(g, forBand: i) }
+        eqPreset = -1
+        setEqEnabled(true)
+    }
+
+    /// Xoá user preset theo tên.
+    func deleteUserPreset(name: String) {
+        guard let dir = eqPresetsDir() else { return }
+        let url = dir.appendingPathComponent("\(name).feq")
+        try? FileManager.default.removeItem(at: url)
+        loadUserPresets()
+    }
+
     // MARK: Transport
     func togglePlay() {
         if tracks.isEmpty { return }
@@ -367,6 +505,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
             if core.ended { core.seekToSeconds(0) }
             core.play(); isPlaying = true
         }
+        // TASK 1: Cập nhật Now Playing khi play/pause
         updateNowPlaying()
     }
 
@@ -409,6 +548,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
     func seek(_ seconds: Double) {
         core.seekToSeconds(seconds)
         position = seconds
+        // TASK 1: Cập nhật Now Playing sau khi tua
         updateNowPlaying()
     }
 
@@ -429,6 +569,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
     }
 
     // MARK: Lock screen / Control Center
+    // TASK 1: updateNowPlaying được gọi sau seek, play, pause, loadTrack
     private func updateNowPlaying() {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: title,
