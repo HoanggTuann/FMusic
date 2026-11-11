@@ -1,4 +1,4 @@
-#ifndef NOMINMAX
+﻿#ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include "PlayerWidget.h"
@@ -258,8 +258,6 @@ void PlayerWidget::clearPlaylist() {
     setWindowTitle(QStringLiteral("FMusic"));
     setCover(QImage());
     saveSettings();
-}
-    setCover(QImage());
 }
 
 void PlayerWidget::loadIndex(int i, bool autoplay) {
@@ -785,15 +783,15 @@ void PlayerWidget::computeLayout() {
     mainX_ = kSidebarW;
 
     const double availH = H - 250.0;
-    const double artSide = std::clamp(std::min(mainW_ * 0.52, availH), 160.0, 420.0);
+    const double artSide = std::clamp(std::min(mainW_ * 0.50, availH), 160.0, 400.0);
     const double cx = mainX_ + mainW_ / 2;
     const double cy = 34.0 + artSide / 2;
     artRect_ = QRectF(cx - artSide / 2, cy - artSide / 2, artSide, artSide);
 
     // Khoảng cách an toàn để tia sóng nhạc không bao giờ chạm tới chữ
-    const double specPad = setSpectrum_ ? (artSide * 0.16 + 22.0) : 24.0;
+    const double specPad = setSpectrum_ ? (artSide * 0.16 + 24.0) : 24.0;
     titleY_ = artRect_.bottom() + specPad;
-    progRect_ = QRectF(cx - std::min(mainW_ * 0.72, 440.0) / 2, titleY_ + 62.0, std::min(mainW_ * 0.72, 440.0), 24.0);
+    progRect_ = QRectF(cx - std::min(mainW_ * 0.72, 440.0) / 2, titleY_ + 58.0, std::min(mainW_ * 0.72, 440.0), 24.0);
 
     const double ccy = progRect_.bottom() + 38.0;
     playRect_ = QRectF(cx - 30, ccy - 30, 60, 60);
@@ -928,7 +926,7 @@ void PlayerWidget::drawArtAndSpectrum(QPainter& p, const float* bands) {
 
     // Spectrum ring (96 radial bars)
     if (setSpectrum_) {
-        const double gap = art * 0.030, maxLen = art * 0.11;
+        const double gap = art * 0.025, maxLen = art * 0.10;
         const QRectF ring = artRect_.adjusted(-gap, -gap, gap, gap);
         const double r = art * kCorner + gap;
         const double P = 2 * (ring.width() - 2 * r) + 2 * (ring.height() - 2 * r) + 2 * kPi * r;
