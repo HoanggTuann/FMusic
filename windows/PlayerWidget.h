@@ -49,6 +49,7 @@ protected:
     void keyPressEvent(QKeyEvent*) override;
     void dragEnterEvent(QDragEnterEvent*) override;
     void dropEvent(QDropEvent*) override;
+    void closeEvent(QCloseEvent*) override;
 
 private:
     struct Track { QString path, title, artist; double duration = 0.0; bool probed = false; };

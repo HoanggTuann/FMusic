@@ -64,6 +64,7 @@ static MPCTrackInfo *MakeInfo(const TrackInfo &ti) {
 - (void)play  { _player->play(); }
 - (void)pause { _player->pause(); }
 - (void)seekToSeconds:(double)seconds { _player->seek(seconds); }
+- (void)setSampleRate:(NSInteger)rate { _player->setSampleRate((int)rate); }
 
 - (BOOL)playing { return _player->playing(); }
 - (BOOL)ended   { return _player->ended(); }

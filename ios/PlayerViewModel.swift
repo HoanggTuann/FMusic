@@ -52,7 +52,7 @@ struct LyricLine: Identifiable {
     let text: String
 }
 
-enum RepeatMode { case off, all, one }
+enum RepeatMode: Int { case off = 0, all = 1, one = 2 }
 
 final class PlayerViewModel: NSObject, ObservableObject {
     let spectrum = SpectrumModel()
@@ -103,7 +103,15 @@ final class PlayerViewModel: NSObject, ObservableObject {
         super.init()
         // TASK 2: load persisted sample rate
         let storedSR = UserDefaults.standard.integer(forKey: "sampleRate")
-        if storedSR > 0 { sampleRate = storedSR }
+        if storedSR > 0 { 
+            sampleRate = storedSR
+            core.setSampleRate(storedSR)
+        }
+        // Load persisted shuffle & repeat mode
+        shuffle = UserDefaults.standard.bool(forKey: "shuffle")
+        let repVal = UserDefaults.standard.integer(forKey: "repeatMode")
+        repeatMode = RepeatMode(rawValue: repVal) ?? .off
+
         loadEq()
         // TASK 3: load user presets on startup
         loadUserPresets()
@@ -182,6 +190,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
     // TASK 2: Set sample rate dynamically, reinitialise engine
     func setSampleRate(_ sr: Int) {
         sampleRate = sr
+        core.setSampleRate(sr)
         engine.stop()
         // Detach old sourceNode before reconfiguring
         if let node = sourceNode { engine.detach(node) }
@@ -566,7 +575,10 @@ final class PlayerViewModel: NSObject, ObservableObject {
         else { loadTrack(currentIndex - 1, autoplay: true) }
     }
 
-    func toggleShuffle() { shuffle.toggle() }
+    func toggleShuffle() {
+        shuffle.toggle()
+        UserDefaults.standard.set(shuffle, forKey: "shuffle")
+    }
 
     func cycleRepeat() {
         switch repeatMode {
@@ -574,6 +586,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
         case .all: repeatMode = .one
         case .one: repeatMode = .off
         }
+        UserDefaults.standard.set(repeatMode.rawValue, forKey: "repeatMode")
     }
 
     func seek(_ seconds: Double) {

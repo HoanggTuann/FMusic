@@ -17,6 +17,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QCloseEvent>
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
@@ -169,6 +170,8 @@ PlayerWidget::PlayerWidget(QWidget* parent) : QWidget(parent) {
 }
 
 PlayerWidget::~PlayerWidget() {
+    saveSettings();
+    saveEq();
     unregisterHotkeys();
     if (sink_) sink_->stop();    // dừng audio thread trước khi Player bị huỷ
 }
@@ -217,6 +220,7 @@ void PlayerWidget::openFiles(const QStringList& files) {
     queueScroll_ = 0;
     addTracks(files);
     loadIndex(0, true);
+    saveSettings();
 }
 
 void PlayerWidget::addFiles(const QStringList& files) {
@@ -224,6 +228,7 @@ void PlayerWidget::addFiles(const QStringList& files) {
     const bool wasEmpty = playlist_.isEmpty();
     addTracks(files);
     if (wasEmpty) loadIndex(0, true);
+    saveSettings();
 }
 
 void PlayerWidget::removeTrack(int i) {
@@ -237,6 +242,7 @@ void PlayerWidget::removeTrack(int i) {
         index_ = std::min(index_, int(playlist_.size()) - 1);
         loadIndex(index_, wasPlaying);
     }
+    saveSettings();
 }
 
 void PlayerWidget::clearPlaylist() {
@@ -250,6 +256,9 @@ void PlayerWidget::clearPlaylist() {
     title_  = QStringLiteral("Chưa có bài hát");
     artist_ = QStringLiteral("Kéo thả tệp nhạc vào đây hoặc nhấn O");
     setWindowTitle(QStringLiteral("FMusic"));
+    setCover(QImage());
+    saveSettings();
+}
     setCover(QImage());
 }
 
@@ -589,8 +598,8 @@ void PlayerWidget::mousePressEvent(QMouseEvent* e) {
     if (prevRect_.contains(pt)) { prev(); return; }
     if (nextRect_.contains(pt)) { next(false); return; }
     if (playRect_.contains(pt)) { togglePlay(); return; }
-    if (shufRect_.contains(pt)) { shuffle_ = !shuffle_; return; }
-    if (repRect_.contains(pt))  { repeat_ = (repeat_ + 1) % 3; return; }
+    if (shufRect_.contains(pt)) { shuffle_ = !shuffle_; saveSettings(); return; }
+    if (repRect_.contains(pt))  { repeat_ = (repeat_ + 1) % 3; saveSettings(); return; }
     if (progRect_.adjusted(-8, -14, 8, 14).contains(pt) && player_.duration() > 0) {
         dragging_ = true;
         updateDrag(pt.x());
@@ -666,8 +675,8 @@ void PlayerWidget::keyPressEvent(QKeyEvent* e) {
     case Qt::Key_L:     togglePanel(Panel::Lyrics); break;
     case Qt::Key_Q:     togglePanel(Panel::Queue); break;
     case Qt::Key_E:     togglePanel(Panel::Eq); break;
-    case Qt::Key_S:     shuffle_ = !shuffle_; break;
-    case Qt::Key_R:     repeat_ = (repeat_ + 1) % 3; break;
+    case Qt::Key_S:     shuffle_ = !shuffle_; saveSettings(); break;
+    case Qt::Key_R:     repeat_ = (repeat_ + 1) % 3; saveSettings(); break;
     case Qt::Key_Escape: panel_ = Panel::None; break;
     case Qt::Key_Comma: togglePanel(Panel::Settings); break;
     case Qt::Key_Up:    volume_ = std::min(1.0, volume_ + 0.05); applyVolume(); saveSettings(); break;
@@ -775,13 +784,15 @@ void PlayerWidget::computeLayout() {
     mainW_ = W - kSidebarW - panelW * panelAnim_;
     mainX_ = kSidebarW;
 
-    const double availH = H - 220.0;
-    const double artSide = std::clamp(std::min(mainW_ * 0.58, availH), 180.0, 480.0);
+    const double availH = H - 250.0;
+    const double artSide = std::clamp(std::min(mainW_ * 0.52, availH), 160.0, 420.0);
     const double cx = mainX_ + mainW_ / 2;
-    const double cy = 40.0 + artSide / 2;
+    const double cy = 34.0 + artSide / 2;
     artRect_ = QRectF(cx - artSide / 2, cy - artSide / 2, artSide, artSide);
 
-    titleY_ = artRect_.bottom() + 18.0;
+    // Khoảng cách an toàn để tia sóng nhạc không bao giờ chạm tới chữ
+    const double specPad = setSpectrum_ ? (artSide * 0.16 + 22.0) : 24.0;
+    titleY_ = artRect_.bottom() + specPad;
     progRect_ = QRectF(cx - std::min(mainW_ * 0.72, 440.0) / 2, titleY_ + 62.0, std::min(mainW_ * 0.72, 440.0), 24.0);
 
     const double ccy = progRect_.bottom() + 38.0;
@@ -917,7 +928,7 @@ void PlayerWidget::drawArtAndSpectrum(QPainter& p, const float* bands) {
 
     // Spectrum ring (96 radial bars)
     if (setSpectrum_) {
-        const double gap = art * 0.035, maxLen = art * 0.15;
+        const double gap = art * 0.030, maxLen = art * 0.11;
         const QRectF ring = artRect_.adjusted(-gap, -gap, gap, gap);
         const double r = art * kCorner + gap;
         const double P = 2 * (ring.width() - 2 * r) + 2 * (ring.height() - 2 * r) + 2 * kPi * r;
@@ -1357,6 +1368,12 @@ void PlayerWidget::drawEq(QPainter& p) {
 
 // ------------------------------- Cài đặt -------------------------------
 
+void PlayerWidget::closeEvent(QCloseEvent* e) {
+    saveSettings();
+    saveEq();
+    QWidget::closeEvent(e);
+}
+
 void PlayerWidget::loadSettings() {
     QSettings s("FMusic", "Player");
     setAmbient_ = s.value("ui/ambient", true).toBool();
@@ -1364,7 +1381,27 @@ void PlayerWidget::loadSettings() {
     setLyricOffsetMs_ = s.value("ui/lyricOffsetMs", 0.0).toDouble();
     volume_ = std::clamp(s.value("audio/volume", 1.0).toDouble(), 0.0, 1.0);
     sampleRate_ = s.value("audio/sampleRate", 44100).toInt();
+    shuffle_ = s.value("playback/shuffle", false).toBool();
+    repeat_ = s.value("playback/repeat", 0).toInt();
     applyVolume();
+
+    // Khôi phục danh sách phát từ đường dẫn đã lưu
+    const QStringList paths = s.value("playlist/paths").toStringList();
+    const int savedIdx = s.value("playlist/currentIndex", -1).toInt();
+    if (!paths.isEmpty()) {
+        QStringList validPaths;
+        for (const QString& p : paths) {
+            if (!p.isEmpty() && (QFile::exists(p) || p.startsWith("http://") || p.startsWith("https://"))) {
+                validPaths.append(p);
+            }
+        }
+        if (!validPaths.isEmpty()) {
+            addTracks(validPaths);
+            if (savedIdx >= 0 && savedIdx < playlist_.size()) {
+                loadIndex(savedIdx, false); // Nạp bài nhưng không tự phát
+            }
+        }
+    }
 }
 
 void PlayerWidget::saveSettings() {
@@ -1374,6 +1411,16 @@ void PlayerWidget::saveSettings() {
     s.setValue("ui/lyricOffsetMs", setLyricOffsetMs_);
     s.setValue("audio/volume", volume_);
     s.setValue("audio/sampleRate", sampleRate_);
+    s.setValue("playback/shuffle", shuffle_);
+    s.setValue("playback/repeat", repeat_);
+
+    QStringList paths;
+    paths.reserve(playlist_.size());
+    for (const Track& t : playlist_) {
+        if (!t.path.isEmpty()) paths.append(t.path);
+    }
+    s.setValue("playlist/paths", paths);
+    s.setValue("playlist/currentIndex", index_);
 }
 
 void PlayerWidget::applyVolume() {

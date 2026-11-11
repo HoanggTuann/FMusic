@@ -35,6 +35,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)play;
 - (void)pause;
 - (void)seekToSeconds:(double)seconds NS_SWIFT_NAME(seekToSeconds(_:));   // giữ tên này trong Swift (không bị đổi thành seek(toSeconds:))
+- (void)setSampleRate:(NSInteger)rate;
 
 /// Gọi từ audio render thread: điền PCM vào 2 buffer planar (L/R).
 - (void)pullLeft:(float *)left right:(float *)right frames:(NSInteger)frames;
