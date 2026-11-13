@@ -3,7 +3,7 @@
 
     <!-- Storage permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
-    <!-- Legacy storage for API ≤ 32 -->
+    <!-- Legacy storage for API <= 32 -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
                      android:maxSdkVersion="32"/>
 
@@ -13,6 +13,8 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="FMusic"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
@@ -34,6 +36,16 @@
                 <data android:mimeType="audio/*"/>
             </intent-filter>
         </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"/>
+        </provider>
 
     </application>
 </manifest>
