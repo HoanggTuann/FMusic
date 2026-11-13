@@ -347,7 +347,7 @@ private fun EQBandSlider(
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (change.pressed) {
                                 change.consume()
-                                if (abs(change.position.y - startY) > viewConfiguration.touchSlop) {
+                                if (abs(change.position.y - startY) > 8.dp.toPx()) {
                                     moved = true
                                 }
                                 updateFromY(change.position.y)

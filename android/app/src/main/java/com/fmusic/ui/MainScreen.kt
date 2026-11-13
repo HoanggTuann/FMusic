@@ -263,7 +263,7 @@ private fun GlassTabBar(
             .padding(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Screen.entries.forEach { tab ->
+        Screen.values().forEach { tab ->
             val isSelected = tab == selected
             val contentColor by animateColorAsState(
                 targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.55f),

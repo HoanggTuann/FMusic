@@ -58,7 +58,7 @@ enum class RepeatMode(val value: Int) {
     OFF(0), ALL(1), ONE(2);
 
     companion object {
-        fun fromInt(v: Int): RepeatMode = entries.firstOrNull { it.value == v } ?: OFF
+        fun fromInt(v: Int): RepeatMode = values().firstOrNull { it.value == v } ?: OFF
     }
 }
 
