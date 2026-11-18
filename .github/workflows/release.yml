@@ -1,0 +1,338 @@
+name: Release FMusic
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tên phiên bản / Tag name (ví dụ: v1.1.0)'
+        required: false
+        default: 'v1.1.0'
+      release_name:
+        description: 'Tiêu đề bản phát hành'
+        required: false
+        default: 'FMusic v1.1.0'
+      prerelease:
+        description: 'Đánh dấu là bản thử nghiệm (Pre-release)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  # -------------------------------------------------------------
+  # 1. BUILD WINDOWS (Setup Installer + Portable ZIP)
+  # -------------------------------------------------------------
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-multimedia
+            mingw-w64-ucrt-x86_64-ffmpeg
+
+      - name: Build FMusic
+        shell: msys2 {0}
+        run: |
+          set -e
+          rm -rf windows/build
+          cd windows
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Bundle DLLs
+        shell: msys2 {0}
+        run: |
+          cd windows/build
+          windeployqt6 --no-translations FMusic.exe || true
+          copy_dll() { [ -e "./$(basename "$1")" ] || cp "$1" . ; return 0; }
+          for d in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+            copy_dll "/ucrt64/bin/$d"
+          done
+          for i in 1 2 3 4 5; do
+            for f in FMusic.exe $(find . -name '*.dll'); do
+              for dep in $(ldd "$f" 2>/dev/null | grep -i '/ucrt64/' | awk '{print $3}'); do
+                copy_dll "$dep"
+              done
+            done
+          done
+          mkdir -p ../dist
+          cp -r FMusic.exe *.dll generic imageformats multimedia networkinformation platforms styles tls ../dist/ 2>/dev/null || true
+
+      - name: Build Inno Setup Installer
+        shell: cmd
+        run: |
+          choco install innosetup --no-progress -y
+          set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if not exist "%ISCC%" set "ISCC=C:\Program Files\Inno Setup 6\ISCC.exe"
+          if not exist "%ISCC%" for /f "delims=" %%i in ('where iscc 2^>nul') do set "ISCC=%%i"
+          "%ISCC%" /DMyAppVersion=1.1.0 Installer\FMusic.iss
+
+      - name: Package Portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path windows/dist/* -DestinationPath "installer-out/FMusic-Windows-Portable.zip" -Force
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-assets
+          path: installer-out/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------
+  # 2. BUILD ANDROID (Release APK)
+  # -------------------------------------------------------------
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Cache Android FFmpeg
+        id: ffmpeg-android-cache
+        uses: actions/cache@v4
+        with:
+          path: android/app/libs
+          key: ffmpeg-android-arm64-v7.1-r3
+
+      - name: Build Android FFmpeg
+        if: steps.ffmpeg-android-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p android/app/libs/arm64-v8a android/app/libs/include
+          if [ -f "android/app/libs/arm64-v8a/libavcodec.so" ]; then
+            echo "FFmpeg already exists in cache."
+            exit 0
+          fi
+          NDK=$(ls -d /usr/local/lib/android/sdk/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK" ]; then
+            echo "Installing NDK..."
+            $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
+            NDK="/usr/local/lib/android/sdk/ndk/27.0.12077973"
+          fi
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "Downloading FFmpeg 7.1..."
+          if curl -fsSL --retry 3 --retry-delay 2 "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n7.1" -o ffmpeg.tar.gz; then
+            tar -xzf ffmpeg.tar.gz
+            mv FFmpeg-n7.1 ffmpeg-7.1 2>/dev/null || true
+            rm -f ffmpeg.tar.gz
+          else
+            curl -fsSL --retry 3 --retry-delay 2 "https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz" | tar xJ
+          fi
+          cd ffmpeg-7.1
+          DECODERS="mp3,mp3float,flac,aac,aac_latm,alac,vorbis,opus,wavpack,ape,wmav1,wmav2,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_f32le,pcm_u8,mjpeg,png,bmp"
+          DEMUXERS="mp3,flac,mov,ogg,wav,aac,ape,asf,matroska,aiff,wv"
+          PARSERS="mpegaudio,aac,aac_latm,flac,vorbis,opus,mjpeg,png,bmp"
+          PROTOCOLS="file,http,https,tcp,tls"
+          ./configure \
+            --prefix="$PWD/../ffmpeg-out" \
+            --enable-cross-compile \
+            --target-os=android \
+            --arch=aarch64 \
+            --cpu=armv8-a \
+            --cc="$TOOLCHAIN/bin/aarch64-linux-android26-clang" \
+            --cxx="$TOOLCHAIN/bin/aarch64-linux-android26-clang++" \
+            --ar="$TOOLCHAIN/bin/llvm-ar" \
+            --ranlib="$TOOLCHAIN/bin/llvm-ranlib" \
+            --strip="$TOOLCHAIN/bin/llvm-strip" \
+            --nm="$TOOLCHAIN/bin/llvm-nm" \
+            --enable-shared \
+            --disable-static \
+            --disable-stripping \
+            --enable-pic \
+            --disable-programs \
+            --disable-doc \
+            --disable-debug \
+            --disable-avdevice \
+            --disable-avfilter \
+            --disable-everything \
+            --enable-swscale \
+            --enable-decoder="$DECODERS" \
+            --enable-demuxer="$DEMUXERS" \
+            --enable-parser="$PARSERS" \
+            --enable-protocol="$PROTOCOLS" \
+            --enable-network \
+            --disable-autodetect \
+            --disable-asm
+          make -j$(nproc)
+          make install-libs install-headers
+          cd ..
+          cp -L ffmpeg-out/lib/lib*.so android/app/libs/arm64-v8a/
+          cp -L -R ffmpeg-out/include/* android/app/libs/include/
+
+      - name: Build Android APK
+        run: |
+          sed -i 's|@style/Theme.FMusic|@android:style/Theme.Material.NoActionBar|g' android/app/src/main/AndroidManifest.xml 2>/dev/null || true
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Stage Android APK
+        run: |
+          mkdir -p android-out
+          cp android/app/build/outputs/apk/release/*.apk android-out/FMusic.apk
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-assets
+          path: android-out/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------
+  # 3. BUILD IOS (Unsigned IPA)
+  # -------------------------------------------------------------
+  build-ios:
+    name: Build iOS
+    runs-on: macos-15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Cache FFmpeg.xcframework
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks/FFmpeg.xcframework
+          key: ffmpeg-ios-${{ hashFiles('scripts/build-ffmpeg-ios.sh') }}
+
+      - name: Build FFmpeg.xcframework
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x ./scripts/build-ffmpeg-ios.sh
+          ./scripts/build-ffmpeg-ios.sh
+
+      - name: Generate Xcode Project
+        run: |
+          cd ios
+          xcodegen generate
+
+      - name: Build iOS App
+        run: |
+          cd ios
+          xcodebuild build \
+            -project FMusic.xcodeproj \
+            -scheme FMusic \
+            -destination 'generic/platform=iOS' \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA
+        run: |
+          cd ios/build/Build/Products/Release-iphoneos
+          mkdir -p Payload
+          cp -R FMusic.app Payload/
+          zip -qr FMusic-unsigned.ipa Payload
+          mkdir -p ../../../../../ios-out
+          cp FMusic-unsigned.ipa ../../../../../ios-out/
+
+      - name: Upload iOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-assets
+          path: ios-out/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------
+  # 4. PUBLISH GITHUB RELEASE
+  # -------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-android, build-ios]
+    if: always() && !cancelled() && (needs.build-windows.result == 'success' || needs.build-android.result == 'success' || needs.build-ios.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download all built assets
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Prepare Release Directory
+        run: |
+          mkdir -p release-files
+          find downloaded-artifacts -type f \( -name "*.exe" -o -name "*.zip" -o -name "*.apk" -o -name "*.ipa" \) -exec cp {} release-files/ \;
+          echo "Files ready for release:"
+          ls -lh release-files/
+
+      - name: Determine Tag and Title
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag_name }}"
+            TITLE="${{ inputs.release_name }}"
+            PRERELEASE="${{ inputs.prerelease }}"
+          elif [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            TAG="${{ github.ref_name }}"
+            TITLE="FMusic ${{ github.ref_name }}"
+            PRERELEASE="false"
+          else
+            TAG="v1.1"
+            TITLE="FMusic v1.1"
+            PRERELEASE="false"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
+          draft: false
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          make_latest: true
+          files: release-files/*
+          body: |
+            ## 🎵 FMusic - Trình phát nhạc Đa nền tảng (Windows, Android, iOS)
+
+            Tất cả các bản dựng mới nhất đã được tự động đóng gói và xuất bản.
+
+            ### 📦 Danh sách tệp tải về:
+            * 🪟 **Windows Installer (`.exe`):** Tệp cài đặt tự động cho Windows (Inno Setup).
+            * 🪟 **Windows Portable (`.zip`):** Bản portable giải nén dùng ngay không cần cài đặt.
+            * 📱 **Android APK (`.apk`):** Tệp cài đặt cho Android (hỗ trợ Android 8.0 trở lên).
+            * 🍏 **iOS IPA (`.ipa`):** Tệp cài đặt không ký cho iPhone/iPad (cài qua Sideloadly, AltStore hoặc TrollStore).
+
+            ---
+            *Bản phát hành được tạo tự động bởi GitHub Actions workflow.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
