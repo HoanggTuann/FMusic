@@ -136,6 +136,7 @@ final class PlayerViewModel: NSObject, ObservableObject {
     private func configureAudio() {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.allowBluetooth, .allowAirPlay])
+        try? session.setPreferredSampleRate(Double(sampleRate))
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
 
         // Handle interruptions (phone calls, Siri, etc.)
@@ -145,8 +146,12 @@ final class PlayerViewModel: NSObject, ObservableObject {
         NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange),
             name: AVAudioSession.routeChangeNotification, object: session)
 
-        // TASK 2: Use dynamic sample rate
-        let format = AVAudioFormat(standardFormatWithSampleRate: Double(sampleRate), channels: 2)!   // float32 planar
+        // Đồng bộ sample rate với phần cứng thực tế để tránh tăng/giảm tốc độ nhạc
+        let hwRate = session.sampleRate > 0 ? Int(session.sampleRate) : sampleRate
+        let effectiveSR = (sampleRate == 96000 && hwRate >= 96000) ? 96000 : (hwRate > 0 ? hwRate : sampleRate)
+        core.setSampleRate(effectiveSR)
+
+        let format = AVAudioFormat(standardFormatWithSampleRate: Double(effectiveSR), channels: 2)!   // float32 planar
         let core = self.core
         sourceNode = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, abl -> OSStatus in
             let list = UnsafeMutableAudioBufferListPointer(abl)
@@ -190,12 +195,11 @@ final class PlayerViewModel: NSObject, ObservableObject {
     // TASK 2: Set sample rate dynamically, reinitialise engine
     func setSampleRate(_ sr: Int) {
         sampleRate = sr
-        core.setSampleRate(sr)
+        UserDefaults.standard.set(sr, forKey: "sampleRate")
         engine.stop()
         // Detach old sourceNode before reconfiguring
         if let node = sourceNode { engine.detach(node) }
-        configureAudio() // reinit with new SR
-        UserDefaults.standard.set(sr, forKey: "sampleRate")
+        configureAudio() // reinit with new SR and sets core.setSampleRate
     }
 
     // MARK: Background playback handling (khi tắt màn hình / khoá máy)
@@ -489,9 +493,17 @@ final class PlayerViewModel: NSObject, ObservableObject {
 
     /// Nhập preset .feq từ URL (file importer hoặc AirDrop, v.v.).
     func importPreset(from url: URL) {
+        let isScoped = url.startAccessingSecurityScopedResource()
+        defer { if isScoped { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let gains = json["gains"] as? [Double], gains.count == 10 else { return }
+        let name = (json["name"] as? String) ?? url.deletingPathExtension().lastPathComponent
+        if let dir = eqPresetsDir() {
+            let dest = dir.appendingPathComponent("\(name).feq")
+            try? data.write(to: dest)
+            loadUserPresets()
+        }
         eqGains = gains.map { Float($0) }
         for (i, g) in eqGains.enumerated() { core.setEqGain(g, forBand: i) }
         eqPreset = -1

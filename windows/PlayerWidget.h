@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <QAudioSink>
 #include <QElapsedTimer>
 #include <QFuture>
@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
+#include <QCloseEvent>
 #include "Lyrics.h"
 #include "MediaSession.h"
 #include "Player.h"

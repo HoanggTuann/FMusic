@@ -155,6 +155,7 @@ PlayerWidget::PlayerWidget(QWidget* parent) : QWidget(parent) {
 
     title_  = QStringLiteral("Chưa có bài hát");
     artist_ = QStringLiteral("Kéo thả tệp nhạc vào đây hoặc nhấn O");
+    setCover(QImage());
 
     loadSettings();
     initAudioSink();
@@ -166,7 +167,7 @@ PlayerWidget::PlayerWidget(QWidget* parent) : QWidget(parent) {
     frame_.start(16);
     clock_.start();
 
-    setCover(QImage());
+    computeLayout();
 }
 
 PlayerWidget::~PlayerWidget() {
@@ -195,6 +196,11 @@ void PlayerWidget::initAudioSink() {
         qWarning("Thiết bị âm thanh không hỗ trợ float32 %d trực tiếp (Qt sẽ chuyển đổi).", sampleRate_);
     }
     sink_ = new QAudioSink(dev, fmt, this);
+    const int actualRate = sink_->format().sampleRate();
+    if (actualRate > 0 && actualRate != player_.sampleRate()) {
+        player_.setSampleRate(actualRate);
+        sampleRate_ = actualRate;
+    }
     sink_->setBufferSize(sampleRate_ / 10 * 2 * int(sizeof(float)));   // ~100 ms
     pcm_ = new PcmDevice(player_, this);
     pcm_->open(QIODevice::ReadOnly);
@@ -1379,6 +1385,8 @@ void PlayerWidget::loadSettings() {
     setLyricOffsetMs_ = s.value("ui/lyricOffsetMs", 0.0).toDouble();
     volume_ = std::clamp(s.value("audio/volume", 1.0).toDouble(), 0.0, 1.0);
     sampleRate_ = s.value("audio/sampleRate", 44100).toInt();
+    if (sampleRate_ != 44100 && sampleRate_ != 48000 && sampleRate_ != 96000) sampleRate_ = 44100;
+    player_.setSampleRate(sampleRate_);
     shuffle_ = s.value("playback/shuffle", false).toBool();
     repeat_ = s.value("playback/repeat", 0).toInt();
     applyVolume();

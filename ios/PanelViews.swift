@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Lời bài hát
 struct LyricsView: View {
@@ -116,6 +117,7 @@ struct EQView: View {
     @State private var presetName = ""
     @State private var exportURL: URL? = nil
     @State private var showShareSheet = false
+    @State private var showFileImporter = false
 
     private let freqs = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
     private let presets = MusicPlayerCore.eqPresetNames()
@@ -177,14 +179,23 @@ struct EQView: View {
             .frame(maxHeight: 280)
             .opacity(vm.eqEnabled ? 1 : 0.45)
 
-            // Nút Lưu Preset và Xuất .FEQ
-            HStack(spacing: 12) {
+            // Nút Lưu Preset, Nhập .FEQ và Xuất .FEQ
+            HStack(spacing: 10) {
                 Button {
                     showSaveAlert = true
                 } label: {
                     Label("Lưu preset", systemImage: "square.and.arrow.down")
                         .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Color.white.opacity(0.16), in: Capsule())
+                }
+
+                Button {
+                    showFileImporter = true
+                } label: {
+                    Label("Nhập .FEQ", systemImage: "arrow.down.doc")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(Color.white.opacity(0.16), in: Capsule())
                 }
 
@@ -196,7 +207,7 @@ struct EQView: View {
                 } label: {
                     Label("Xuất .FEQ", systemImage: "square.and.arrow.up")
                         .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(Color.white.opacity(0.16), in: Capsule())
                 }
             }
@@ -218,6 +229,11 @@ struct EQView: View {
             Button("Huỷ", role: .cancel) { presetName = "" }
         }
         .environment(\.colorScheme, .dark)
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.data, .json]) { result in
+            if let url = try? result.get() {
+                vm.importPreset(from: url)
+            }
+        }
         .sheet(isPresented: $showShareSheet) {
             if let exportURL {
                 ShareSheet(items: [exportURL])

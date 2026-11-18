@@ -46,13 +46,18 @@ void Equalizer::applyPreset(int idx) {
     version_.fetch_add(1);
 }
 
-// v1.1: cập nhật sample rate và tính lại hệ số biquad ngay lập tức
+// v1.1: cập nhật sample rate an toàn cho audio thread
 void Equalizer::setSampleRate(int sr) {
     if (sr <= 0) return;
-    sr_ = sr;
-    updateCoeffs();
-    // Đánh dấu version để process() không tính lại thừa
-    applied_ = version_.load();
+    sr_.store(sr);
+    version_.fetch_add(1);
+}
+
+void Equalizer::reset() {
+    for (auto& b : bq_) {
+        b.z1[0] = b.z1[1] = 0.f;
+        b.z2[0] = b.z2[1] = 0.f;
+    }
 }
 
 // v1.1: lưu preset tùy chỉnh ra tệp JSON
@@ -157,14 +162,24 @@ bool Equalizer::loadPreset(const std::string& path) {
 
 void Equalizer::updateCoeffs() {
     float maxPos = 0.f;
+    const int sr = std::max(8000, sr_.load());
     for (int i = 0; i < kBands; ++i) {
         const float db = gains_[i].load();
         maxPos = std::max(maxPos, db);
         Biquad& b = bq_[i];
+        const bool wasActive = b.active;
         b.active = std::fabs(db) > 0.01f;
-        if (!b.active) continue;
+        if (!b.active) {
+            b.z1[0] = b.z1[1] = 0.f;
+            b.z2[0] = b.z2[1] = 0.f;
+            continue;
+        }
+        if (!wasActive) {
+            b.z1[0] = b.z1[1] = 0.f;
+            b.z2[0] = b.z2[1] = 0.f;
+        }
         const double A = std::pow(10.0, db / 40.0);
-        const double w0 = 2.0 * kPi * std::min<double>(kFreqs[i], sr_ * 0.45) / sr_;
+        const double w0 = 2.0 * kPi * std::min<double>(kFreqs[i], sr * 0.45) / sr;
         const double alpha = std::sin(w0) / (2.0 * 1.41);
         const double a0 = 1.0 + alpha / A;
         b.b0 = float((1.0 + alpha * A) / a0);
@@ -177,6 +192,7 @@ void Equalizer::updateCoeffs() {
 }
 
 static inline float softClip(float x) {
+    if (!std::isfinite(x)) return 0.f;
     const float t = 0.92f, a = std::fabs(x);
     if (a <= t) return x;
     const float s = t + (1.f - t) * std::tanh((a - t) / (1.f - t));
@@ -193,9 +209,16 @@ void Equalizer::process(float* s, size_t frames) {
             for (int i = 0; i < kBands; ++i) {
                 Biquad& b = bq_[i];
                 if (!b.active) continue;
-                const float y = b.b0 * x + b.z1[ch];              // Direct Form II transposed
+                float y = b.b0 * x + b.z1[ch];              // Direct Form II transposed
                 b.z1[ch] = b.b1 * x - b.a1 * y + b.z2[ch];
                 b.z2[ch] = b.b2 * x - b.a2 * y;
+
+                // Bảo vệ chống số NaN / vô cực làm mất tiếng hoàn toàn khi chỉnh EQ
+                if (!std::isfinite(y) || !std::isfinite(b.z1[ch]) || !std::isfinite(b.z2[ch])) {
+                    b.z1[0] = b.z1[1] = 0.f;
+                    b.z2[0] = b.z2[1] = 0.f;
+                    y = x;
+                }
                 x = y;
             }
             s[2 * f + ch] = softClip(x);

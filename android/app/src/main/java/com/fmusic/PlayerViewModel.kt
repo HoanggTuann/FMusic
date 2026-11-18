@@ -426,6 +426,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         audioTrack = track
         track.play()
 
+        val actualSr = track.sampleRate
+        if (actualSr > 0) {
+            core.setSampleRate(coreHandle, actualSr)
+        }
+
         val framesPerChunk = maxOf(256, bufSize / 8)
         val pullBuf = FloatArray(framesPerChunk * 2)
         audioJob = viewModelScope.launch(Dispatchers.IO) {
@@ -944,14 +949,47 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadEqPreset(path: String) {
         runCatching {
-            val json = JSONObject(File(path).readText())
+            val text = File(path).readText()
+            val json = JSONObject(text)
             val arr = json.getJSONArray("gains")
             if (arr.length() != 10) return
             val gains = FloatArray(10) { arr.getDouble(it).toFloat() }
+            val rawName = json.optString("name", File(path).nameWithoutExtension).trim()
+            val name = rawName.ifBlank { File(path).nameWithoutExtension }.replace(Regex("[/\\\\]"), "_")
+            File(eqPresetsDir(), "$name.feq").writeText(text)
+            loadUserPresets()
             gains.forEachIndexed { i, g -> core.setEqGain(coreHandle, i, g) }
             _eqGains.value = gains
             _eqPreset.value = -1
             setEqEnabled(json.optBoolean("enabled", true))
+            saveEq()
+        }
+    }
+
+    fun importEqPresetUri(uri: Uri) {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val text = runCatching {
+                app.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+            }.getOrNull() ?: return@launch
+            runCatching {
+                val json = JSONObject(text)
+                val arr = json.getJSONArray("gains")
+                if (arr.length() != 10) return@launch
+                val gains = FloatArray(10) { arr.getDouble(it).toFloat() }
+                val rawName = json.optString("name", "Imported_Preset").trim()
+                val name = rawName.ifBlank { "Imported_Preset" }.replace(Regex("[/\\\\]"), "_")
+
+                File(eqPresetsDir(), "$name.feq").writeText(text)
+                withContext(Dispatchers.Main) {
+                    loadUserPresets()
+                    gains.forEachIndexed { i, g -> core.setEqGain(coreHandle, i, g) }
+                    _eqGains.value = gains
+                    _eqPreset.value = -1
+                    setEqEnabled(json.optBoolean("enabled", true))
+                    saveEq()
+                }
+            }
         }
     }
 

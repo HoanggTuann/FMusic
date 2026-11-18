@@ -1,6 +1,8 @@
 package com.fmusic.ui
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -68,6 +70,12 @@ fun EqualizerScreen(vm: PlayerViewModel) {
 
     var showSaveDialog by remember { mutableStateOf(false) }
     var presetName by remember { mutableStateOf("") }
+
+    val eqPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) vm.importEqPresetUri(uri)
+    }
 
     Column(
         modifier = Modifier
@@ -176,25 +184,45 @@ fun EqualizerScreen(vm: PlayerViewModel) {
             }
         }
 
-        // Nut Luu preset va Xuat .FEQ
+        // Nut Luu preset, Nhap .FEQ va Xuat .FEQ
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)
+            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)
         ) {
             Row(
                 modifier = Modifier
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.16f))
                     .clickable { showSaveDialog = true }
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                TrayArrowIcon(up = false, tint = Color.White, size = 15.dp)
+                TrayArrowIcon(up = false, tint = Color.White, size = 14.dp)
                 Text(
                     text = "Lưu preset",
                     color = Color.White,
-                    fontSize = 13.sp,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.16f))
+                    .clickable {
+                        eqPicker.launch(arrayOf("*/*", "application/json", "application/octet-stream"))
+                    }
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                BookmarkIcon(tint = Color.White, size = 13.dp)
+                Text(
+                    text = "Nhập .FEQ",
+                    color = Color.White,
+                    fontSize = 12.5.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -217,15 +245,15 @@ fun EqualizerScreen(vm: PlayerViewModel) {
                         }
                         context.startActivity(Intent.createChooser(share, "Xuất preset .FEQ"))
                     }
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                TrayArrowIcon(up = true, tint = Color.White, size = 15.dp)
+                TrayArrowIcon(up = true, tint = Color.White, size = 14.dp)
                 Text(
                     text = "Xuất .FEQ",
                     color = Color.White,
-                    fontSize = 13.sp,
+                    fontSize = 12.5.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }

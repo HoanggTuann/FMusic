@@ -26,6 +26,7 @@ bool Player::load(const std::string& path, std::string* err) {
     cover_ = dec_->coverArt();
     ring_.clear();
     analyzer_.reset();
+    eq_.reset();
     eof_ = false; ended_ = false; seekReq_ = -1.0; base_ = 0.0; played_ = 0;
     startThread();
     return true;
@@ -82,6 +83,7 @@ void Player::decodeLoop() {
             dec_->seek(s);
             ring_.clear();
             analyzer_.reset();
+            eq_.reset();
             chunk.clear(); off = 0;
             base_ = s; played_ = 0;
             eof_ = false; ended_ = false;

@@ -26,6 +26,7 @@ public:
 
     // v1.1: cập nhật sample rate và tính lại hệ số biquad
     void  setSampleRate(int sr);
+    void  reset();
 
     // v1.1: lưu / đọc preset tùy chỉnh dạng JSON
     bool savePreset(const std::string& path, const std::string& name) const;
@@ -45,7 +46,7 @@ private:
     };
     void updateCoeffs();
 
-    int sr_;
+    std::atomic<int> sr_{44100};
     std::atomic<bool> enabled_{false};
     std::atomic<float> gains_[kBands];
     std::atomic<uint32_t> version_{1};
